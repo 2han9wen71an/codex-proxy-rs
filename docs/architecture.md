@@ -270,7 +270,8 @@ Vue 普通管理请求的错误提示由 `api/request.ts` 响应拦截器统一�
 规范化异常保留 `status`、`code`、`requestId` 与 `kind`。页面和 `useAsyncAction` 不重复弹出接口错误；
 查询可以保留失败状态与重试入口，本地校验、文件操作、SSE 诊断和成功响应中的业务结果仍归各自 owner。
 
-API 模块通过统一的 `RequestOptions` 传递 `signal`、`timeout` 和 `silent`。取消或已被新查询取代的请求
+API 模块按 `url`、`method`、`data`（POST）或 `params: data`（GET）排列请求配置；
+仅在实际调用方需要时提供 `RequestOptions`（`signal`、`timeout`、`silent`），并放在请求配置末尾。取消或已被新查询取代的请求
 不弹提示；后台轮询、重启探测等显式使用 `silent`，它只关闭提示，不吞异常，也不跳过会话失效处理。
 批量操作的部分成功汇总、不可逆操作的结果未知等必要业务处理先将对应请求静默，再由业务 owner 提供
 一次有上下文的反馈；不得为普通失败重新维护一套消息或业务码映射。
