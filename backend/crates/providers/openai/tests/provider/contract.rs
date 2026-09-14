@@ -2407,7 +2407,7 @@ async fn websocket_midstream_error_frame_surfaces_upstream_message_after_deliver
             None => panic!("midstream error frame must surface a typed failure"),
         }
     };
-    let _ = server.abort();
+    server.abort();
 
     assert_eq!(
         failure.kind(),

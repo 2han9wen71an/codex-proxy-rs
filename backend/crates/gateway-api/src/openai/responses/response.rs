@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use gateway_core::event::{GatewayEvent, ProtocolWireEvent, ProviderEvent};
 use gateway_protocol::openai::sse::{
-    encode_sse_event_with_metadata, response_failed_sse_event_with_id,
+    encode_sse_event_with_metadata, response_failed_sse_data_from_error_event,
 };
 use serde_json::Value;
 
@@ -19,6 +19,7 @@ const OPENAI_PROTOCOL: &str = "openai";
 #[derive(Debug, Default)]
 pub struct OpenAiResponsesEncoder {
     response_id: Option<String>,
+    response_snapshot: Option<Value>,
     wire_terminal: Option<Value>,
     wire_failure: bool,
 }
@@ -29,6 +30,7 @@ impl OpenAiResponsesEncoder {
     pub const fn new() -> Self {
         Self {
             response_id: None,
+            response_snapshot: None,
             wire_terminal: None,
             wire_failure: false,
         }
@@ -41,13 +43,21 @@ impl OpenAiResponsesEncoder {
             return Vec::new();
         };
         self.observe_wire(wire);
-        // SSE 协议没有 `error` 事件：那是 WS 上游协议的错误形态。codex 等 SSE
-        // 客户端会把未知事件类型静默忽略，裸转发只会让客户端看到无原因的
-        // 流 EOF。翻译成 SSE 协议的 `response.failed`，保留上游错误负载。
+        // 当前 Codex 不消费 Responses `error` event，会在 EOF 时丢失失败原因。
+        // 在客户端 SSE 边界统一投影成它能识别的 `response.failed`。
         if wire.event_type() == Some("error")
-            && let Some(frame) = self.response_failed_from_error_wire(wire)
+            && let Some(data) = response_failed_sse_data_from_error_event(
+                self.response_snapshot.as_ref(),
+                self.response_id.as_deref(),
+                wire.data(),
+            )
         {
-            return vec![Bytes::from(frame)];
+            return vec![Bytes::from(encode_sse_event_with_metadata(
+                "response.failed",
+                &data.to_string(),
+                wire.sse_id(),
+                wire.sse_retry(),
+            ))];
         }
         if let Some(raw_sse_frame) = wire.raw_sse_frame() {
             return vec![raw_sse_frame.clone()];
@@ -58,35 +68,6 @@ impl OpenAiResponsesEncoder {
             wire.sse_id(),
             wire.sse_retry(),
         ))]
-    }
-
-    /// 把 WS 上游的 `error` 终止帧翻译成 SSE 协议的 `response.failed` 事件。
-    ///
-    /// 上游错误负载原样保留；response id 沿用已交付的 `response.created`，
-    /// 缺失时由编码器回退随机 id，保证事件形状仍是合法的 SSE 终态。
-    fn response_failed_from_error_wire(&self, wire: &ProtocolWireEvent) -> Option<String> {
-        let error = match wire.data().get("error") {
-            Some(error) if !error.is_null() => error,
-            _ => return None,
-        };
-        let error_type = error
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("unavailable");
-        let code = error
-            .get("code")
-            .and_then(Value::as_str)
-            .unwrap_or("upstream_error");
-        let message = error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("upstream request failed");
-        Some(response_failed_sse_event_with_id(
-            self.response_id.as_deref(),
-            error_type,
-            code,
-            message,
-        ))
     }
 
     /// 消费一个 Provider event，并返回 WebSocket JSON messages。
@@ -149,6 +130,16 @@ impl OpenAiResponsesEncoder {
         let effective_type = wire
             .event_type()
             .or_else(|| wire.data().get("type").and_then(Value::as_str));
+        if matches!(
+            effective_type,
+            Some("response.created" | "response.in_progress" | "response.queued")
+        ) && let Some(response) = wire
+            .data()
+            .get("response")
+            .filter(|value| value.is_object())
+        {
+            self.response_snapshot = Some(response.clone());
+        }
         if matches!(
             effective_type,
             Some("response.completed" | "response.incomplete")

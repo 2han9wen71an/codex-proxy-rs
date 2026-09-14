@@ -34,6 +34,7 @@ use gateway_core::event::{
 use gateway_core::operation::{Operation, OperationKind};
 use gateway_core::routing::PublicModelId;
 use gateway_core::upstream::{OpaqueUpstreamValue, UpstreamSendState};
+use gateway_protocol::openai::sse::{encode_sse_event, parse_sse_events};
 use serde_json::{Value, json};
 
 use gateway_api::openai::responses::{collect_execution_response, stream_execution_response};
@@ -1575,22 +1576,27 @@ async fn streaming_upstream_wire_failure_should_not_be_rewritten_as_a_gateway_er
 #[tokio::test]
 async fn streaming_upstream_error_event_should_be_translated_to_response_failed_for_sse() {
     let trace = Arc::new(Trace::default());
-    // WS 上游的错误形态是 `error` 事件；SSE 协议里没有对应消费者，codex 等
-    // SSE 客户端会静默忽略未知事件类型，只能看到无原因的流 EOF。
+    let error_data = json!({
+        "type": "error",
+        "error": {
+            "type": "service_unavailable_error",
+            "code": "server_is_overloaded",
+            "message": "Our servers are currently overloaded. Please try again later.",
+            "param": null,
+            "future_error_field": {"keep": true}
+        },
+        "sequence_number": 2,
+        "future_event_field": {"keep": true}
+    });
+    let projected_error_frame = Bytes::from(encode_sse_event("error", &error_data.to_string()));
     let error_wire = ProviderEvent::wire(
-        ProtocolWireEvent::json(
+        ProtocolWireEvent::json_with_raw_sse_metadata(
             "openai",
             Some("error".to_owned()),
-            json!({
-                "type": "error",
-                "error": {
-                    "type": "service_unavailable_error",
-                    "code": "server_is_overloaded",
-                    "message": "Our servers are currently overloaded. Please try again later.",
-                    "param": null
-                },
-                "sequence_number": 2
-            }),
+            error_data,
+            projected_error_frame,
+            None,
+            None,
         )
         .expect("valid upstream error wire"),
     );
@@ -1604,7 +1610,8 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
                 "response": {
                     "id": "resp_test",
                     "model": "public-model",
-                    "status": "in_progress"
+                    "status": "in_progress",
+                    "future_response_field": {"keep": true}
                 }
             }),
         )
@@ -1633,15 +1640,44 @@ async fn streaming_upstream_error_event_should_be_translated_to_response_failed_
         .await
         .expect("read SSE body");
     let body = String::from_utf8(body.to_vec()).expect("SSE is UTF-8");
+    let events = parse_sse_events(&body).expect("translated SSE should parse");
+    let failed = events
+        .iter()
+        .find(|event| event.event.as_deref() == Some("response.failed"))
+        .expect("translated response.failed event");
+    let failed: Value = serde_json::from_str(&failed.data).expect("response.failed JSON");
 
-    // 原始 `error` 事件必须翻译成 SSE 协议的 `response.failed`，保留上游原话。
-    assert!(body.contains("event: response.failed"));
-    assert!(body.contains("Our servers are currently overloaded. Please try again later."));
-    assert!(body.contains("\"code\":\"server_is_overloaded\""));
-    assert!(body.contains("\"type\":\"service_unavailable_error\""));
-    assert!(body.contains("\"id\":\"resp_test\""));
-    assert!(!body.contains("event: error\n"));
-    assert!(body.ends_with("data: [DONE]\n\n"));
+    assert_eq!(
+        (
+            failed,
+            body.matches("event: response.failed").count(),
+            body.contains("event: error\n"),
+            body.ends_with("data: [DONE]\n\n"),
+        ),
+        (
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_test",
+                    "model": "public-model",
+                    "status": "failed",
+                    "error": {
+                        "type": "service_unavailable_error",
+                        "code": "server_is_overloaded",
+                        "message": "Our servers are currently overloaded. Please try again later.",
+                        "param": null,
+                        "future_error_field": {"keep": true}
+                    },
+                    "future_response_field": {"keep": true}
+                },
+                "sequence_number": 2,
+                "future_event_field": {"keep": true}
+            }),
+            1,
+            false,
+            true,
+        )
+    );
 }
 
 #[tokio::test]
