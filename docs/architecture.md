@@ -427,7 +427,9 @@ observation、调用 metadata；最终失败的关联头不与 opening 身份混
 `generate: false` 将连接与上下文准备归类为 `prewarm`，不信任客户端单独声明的同名 metadata。
 Store 的共享用量口径排除这些预热记录，账号用量与额度预测复用同一规则；原始请求审计、响应额度
 观测和费用事实仍保留，不将未知费用改写为零，也不影响 Client Key 结算账本。
-实际 `service_tier` 只接受上游响应事件确认，不能用请求期望值替代。
+OpenAI Responses 的统计档位与本地费用估算统一使用 Provider 最终发给上游的请求 `service_tier`，
+不由响应回显覆盖；未发送档位时保留缺失值，展示与估算按标准档处理。上游响应档位独立保留在
+Provider metadata 的 `upstreamServiceTier`，不改写客户端收到的响应，也不据此断言实际加速效果。
 
 Worker 由各 Bundle 贡献、由 Host 统一监督：
 

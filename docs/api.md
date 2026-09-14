@@ -884,13 +884,16 @@ Dashboard 的 `accountUsage[]` 由后端提供 `usageWindow`、`metricLabel`、`
 和本地用量由 Provider/Admin 投影。前端不得从套餐缺失推断免费套餐，也不得从显示时舍入的百分比推断
 触顶。滚动窗口使用相应时间范围的本地用量，独立于 Dashboard 的今日统计范围。
 
-OpenAI 的 `serviceTier` 只接受上游响应生命周期事件确认的实际 `response.service_tier`；请求里的
-期望档位只保留在 request summary，不能冒充响应事实。计费展示把 `priority`/`fast` 映射为 `Fast`，
-`flex` 映射为 `Flex`，缺失或 `default` 映射为 `Default`；未知非空值原样展示。各模型、档位及长上下文
-区间使用明确登记的价格；缺少对应价格时不估算，不以固定倍数兜底。展示的倍率由所选档位与标准档位
-费用之比计算，托管工具调用费不随 Token 档位倍增。
-响应未报告实际档位时，本地费用估算回退到请求档位；该推测不写入响应 `serviceTier`，也不能确认
-上游最终采用了该档位，因此本地费用不能代替官方账单。
+OpenAI Responses 用量记录的 `serviceTier` 与本地费用估算统一采用 Provider 最终发给上游的请求
+`service_tier`，不使用响应档位覆盖或回退。例如发送 `priority`、响应回显 `default` 时，仍显示
+`Fast` 并按 Priority 价格估算。未发送档位时，`serviceTier` 保持缺失，展示与估算按标准档处理。
+计费展示把 `priority`/`fast` 映射为 `Fast`，`flex` 映射为 `Flex`，缺失或 `default`/`standard`
+映射为 `Standard`；其他非空值以首字母大写展示。各模型、档位及长上下文区间使用明确登记的价格；缺少对应
+价格时不估算（包括 `auto` 和未知档位），不以固定倍数兜底。展示的倍率由所选档位与标准档位费用之比
+计算，托管工具调用费不随 Token 档位倍增。
+Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 供诊断；发送给客户端的
+原始 `response.service_tier` 不变。用量中的 Fast 仅表示发送档位，不能证明上游实际加速，本地费用
+估算也不能代替官方账单。该口径仅作用于新记录，不回填历史档位或重算已存储费用。
 
 本地计价规则只保留尚在服务的型号；已过官方关闭日期的型号不再新增本地估价。清理计价规则不删除或
 重新计算已存储的历史费用；缺少当前计价规则时，历史总额仍保留，但无法再据此补充费用拆分。
