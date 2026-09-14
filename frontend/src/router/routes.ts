@@ -7,8 +7,15 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/login/index.vue'),
   },
   {
+    path: '/key-usage',
+    name: 'key-usage',
+    component: () => import('@/views/key-usage/index.vue'),
+    meta: { role: 'key' },
+  },
+  {
     path: '/',
     component: () => import('@/layout/index.vue'),
+    meta: { role: 'admin' },
     children: [
       {
         path: '',

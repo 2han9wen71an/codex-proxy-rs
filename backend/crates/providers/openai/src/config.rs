@@ -8,7 +8,9 @@ use serde::Deserialize;
 use url::{Host, Url};
 
 use crate::credential::CodexQuotaRefreshPolicy;
-use crate::transport::profile::{CodexResidency, CodexWireProfile, CodexWireProfileState};
+use crate::transport::profile::{
+    CodexRequestLocation, CodexResidency, CodexWireProfile, CodexWireProfileState,
+};
 use crate::transport::session::{CodexSessionIdentity, CodexSessionIdentityError};
 use crate::transport::websocket::CodexWebSocketPoolConfig;
 use crate::{
@@ -290,6 +292,8 @@ pub struct CodexWireProfileConfig {
     pub terminal: String,
     #[serde(default)]
     pub residency: Option<CodexResidency>,
+    #[serde(default)]
+    pub location: CodexRequestLocation,
     pub verified_at: DateTime<Utc>,
 }
 
@@ -305,6 +309,7 @@ impl Default for CodexWireProfileConfig {
             arch: "arm64".to_owned(),
             terminal: "unknown".to_owned(),
             residency: None,
+            location: CodexRequestLocation::default(),
             // 制品核验于 2026-09-06T03:26:12.084Z；进程启动不构成重新核验。
             verified_at: DateTime::UNIX_EPOCH + chrono::Duration::milliseconds(1_788_665_172_084),
         }
@@ -331,10 +336,29 @@ impl CodexWireProfileConfig {
             ("openai.wire_profile.os_version", self.os_version.as_str()),
             ("openai.wire_profile.arch", self.arch.as_str()),
             ("openai.wire_profile.terminal", self.terminal.as_str()),
+            (
+                "openai.wire_profile.location.region",
+                self.location.region.as_str(),
+            ),
+            (
+                "openai.wire_profile.location.city",
+                self.location.city.as_str(),
+            ),
         ] {
             if value.trim().is_empty() {
                 return Err(OpenAiConfigError::InvalidField(field));
             }
+        }
+        if self.location.country.len() != 2
+            || !self
+                .location
+                .country
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase())
+        {
+            return Err(OpenAiConfigError::InvalidField(
+                "openai.wire_profile.location.country",
+            ));
         }
         if semver::Version::parse(&self.codex_version).is_err() {
             return Err(OpenAiConfigError::InvalidField(
@@ -367,6 +391,7 @@ impl From<CodexWireProfileConfig> for CodexWireProfile {
             arch: value.arch,
             terminal: value.terminal,
             residency: value.residency,
+            location: value.location,
             verified_at: value.verified_at,
         }
     }

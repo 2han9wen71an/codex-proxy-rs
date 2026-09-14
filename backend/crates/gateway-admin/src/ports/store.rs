@@ -2,7 +2,7 @@
 //!
 //! 端口按业务资源拆分，方法使用领域模型，不暴露连接池、事务或 Redis client。
 
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -20,11 +20,12 @@ use crate::model::{
         AccountUpdateResult, AccountUsage, AccountUsageWindowQuery, AccountUsageWindowResult,
         AccountsUpdateResult, BatchUpdateAccounts, DeleteAccounts, UpdateAccount,
     },
-    auth::{AdminAuditEvent, AdminSession},
+    auth::{AdminAuditEvent, AuthSession},
     client_keys::{
         ClientKeyListQuery, ClientKeyPage, ClientKeyRecord, ClientKeySecret, DeleteClientKey,
         NewClientKey, SetClientKeyEnabled, UpdateClientKey,
     },
+    client_usage::{ClientUsageKey, ClientUsageQuery, ClientUsageRecordsPage},
     observability::{
         DashboardObservation, DashboardRuntimeSlots, DiagnosticDimension, DiagnosticObservation,
         OpsErrorPage, OpsErrorQuery, RequestMetricPoint, TimeRange, UsageCalculatedBillingFact,
@@ -195,7 +196,7 @@ pub trait AccountRuntimeStore: Send + Sync {
     ) -> AdminStoreResult<AccountRuntimeSnapshot>;
 }
 
-/// 管理员密码、会话和安全审计。
+/// 控制面凭据、统一会话、登录限流与管理员安全审计。
 #[async_trait]
 pub trait AuthStore: Send + Sync {
     async fn load_password_hash(&self, admin_user_id: &str) -> AdminStoreResult<Option<String>>;
@@ -208,12 +209,25 @@ pub trait AuthStore: Send + Sync {
 
     async fn load_admin_api_key(&self) -> AdminStoreResult<Option<AdminApiKey>>;
 
-    async fn load_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>>;
+    async fn load_session(&self, session_id: &str) -> AdminStoreResult<Option<AuthSession>>;
 
-    async fn store_session(&self, session_id: &str, session: &AdminSession)
-    -> AdminStoreResult<()>;
+    async fn store_session(&self, session_id: &str, session: &AuthSession) -> AdminStoreResult<()>;
 
-    async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AdminSession>>;
+    async fn delete_session(&self, session_id: &str) -> AdminStoreResult<Option<AuthSession>>;
+
+    async fn client_key_enabled(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<bool>;
+
+    /// 原子消费来源桶与全局桶的一次登录尝试；被拒绝时返回建议重试间隔。
+    async fn consume_login_attempt(
+        &self,
+        source_ip: IpAddr,
+        source_limit: u32,
+        global_limit: u32,
+        window: Duration,
+    ) -> AdminStoreResult<Option<Duration>>;
 
     async fn append_audit_event(&self, event: AdminAuditEvent) -> AdminStoreResult<()>;
 }
@@ -251,6 +265,21 @@ pub trait ClientKeyStore: Send + Sync {
         command: DeleteClientKey,
         context: &MutationContext,
     ) -> AdminStoreResult<Revision>;
+}
+
+/// Client Key 自助用量的安全投影与明细查询。
+#[async_trait]
+pub trait ClientUsageStore: Send + Sync {
+    async fn list_client_usage_records(
+        &self,
+        key_id: &gateway_core::policy::ClientApiKeyId,
+        query: ClientUsageQuery,
+    ) -> AdminStoreResult<ClientUsageRecordsPage>;
+
+    async fn load_client_usage_key(
+        &self,
+        id: &gateway_core::policy::ClientApiKeyId,
+    ) -> AdminStoreResult<Option<ClientUsageKey>>;
 }
 
 /// Provider-neutral account group management transactions.
@@ -411,6 +440,7 @@ pub struct AdminStorePorts {
     accounts: AdminAccountStorePorts,
     auth: Arc<dyn AuthStore>,
     client_keys: Arc<dyn ClientKeyStore>,
+    client_usage: Arc<dyn ClientUsageStore>,
     observability: Arc<dyn ObservabilityStore>,
     settings: Arc<dyn SettingsStore>,
     backup: BackupStorePorts,
@@ -422,6 +452,7 @@ impl AdminStorePorts {
         accounts: AdminAccountStorePorts,
         auth: Arc<dyn AuthStore>,
         client_keys: Arc<dyn ClientKeyStore>,
+        client_usage: Arc<dyn ClientUsageStore>,
         observability: Arc<dyn ObservabilityStore>,
         settings: Arc<dyn SettingsStore>,
         backup: BackupStorePorts,
@@ -430,6 +461,7 @@ impl AdminStorePorts {
             accounts,
             auth,
             client_keys,
+            client_usage,
             observability,
             settings,
             backup,
@@ -464,6 +496,11 @@ impl AdminStorePorts {
     #[must_use]
     pub fn client_keys(&self) -> Arc<dyn ClientKeyStore> {
         self.client_keys.clone()
+    }
+
+    #[must_use]
+    pub fn client_usage(&self) -> Arc<dyn ClientUsageStore> {
+        self.client_usage.clone()
     }
 
     #[must_use]
