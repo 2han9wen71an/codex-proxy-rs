@@ -327,6 +327,32 @@ fn config_loader_should_reject_invalid_desktop_profile_fields() {
     assert_rejected(valid_config().replace("desktop_build: '8109'", "desktop_build: 'build'"));
 }
 
+#[test]
+fn config_loader_should_accept_default_and_custom_request_locations() {
+    let original = valid_config();
+    let omitted = original
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("location:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(original, omitted);
+    parse_config(&omitted).expect("location defaults when omitted");
+    let custom = original.replace(
+        "location: { country: 'US', region: 'Ohio', city: 'Piketon', timezone: 'America/New_York' }",
+        "location: { country: 'NZ', region: 'Auckland', city: 'Auckland', timezone: 'Pacific/Auckland' }",
+    );
+    assert_ne!(original, custom);
+    parse_config(&custom).expect("custom location from YAML");
+}
+
+#[test]
+fn config_loader_should_reject_invalid_request_location_timezones() {
+    let original = valid_config();
+    let invalid = original.replace("timezone: 'America/New_York'", "timezone: 'Not/A_Timezone'");
+    assert_ne!(original, invalid);
+    assert_rejected(invalid);
+}
+
 fn assert_rejected(config: String) {
     assert!(parse_config(&config).is_err());
 }

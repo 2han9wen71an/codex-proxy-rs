@@ -50,6 +50,11 @@ Linux 上应用容器以 `10001:10001` 运行。上述命令将应用数据和�
 模板不重复列出这些默认项。运行后，Provider 检查官方版本并更新运行时请求画像，
 不回写 `config.yaml`；检查失败时继续使用上一份有效画像。版本检查不等于重新核验 TLS。
 
+`openai.wire_profile.location` 集中配置请求地区，省略时默认为 `US / Ohio / Piketon / America/New_York`。
+自定义时完整填写 `country`（两位大写国家代码）、`region`、`city` 和 `timezone`（IANA 时区）；修改后重启生效。
+它统一 Responses 的 Web Search 地区与带环境标记的日期、时区，不修改普通聊天内容或 epoch 时间戳，
+也不替代 `residency` 约束或随官方版本检查变化。
+
 ## 启动
 
 ```bash

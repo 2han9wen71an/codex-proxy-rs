@@ -3,7 +3,76 @@ use std::path::Path;
 use chrono::{TimeZone as _, Utc};
 use provider_openai::config::{
     CodexWireProfileConfig, DEFAULT_STREAM_MAX_RETRIES, MAX_STREAM_MAX_RETRIES, OpenAiConfig,
+    OpenAiConfigError,
 };
+use provider_openai::transport::profile::CodexRequestLocation;
+use serde_json::json;
+
+#[test]
+fn openai_location_defaults_should_match_the_existing_request_profile() {
+    let profile = OpenAiConfig::default().wire_profile_state().snapshot();
+    assert_eq!(profile.location.country, "US");
+    assert_eq!(profile.location.region, "Ohio");
+    assert_eq!(profile.location.city, "Piketon");
+    assert_eq!(profile.location.timezone.name(), "America/New_York");
+}
+
+#[test]
+fn openai_config_should_preserve_a_custom_location_in_the_runtime_profile() {
+    let location: CodexRequestLocation = serde_json::from_value(json!({
+        "country": "NZ", "region": "Auckland", "city": "Auckland", "timezone": "Pacific/Auckland"
+    }))
+    .expect("location configuration");
+    let mut config = valid_config();
+    config.wire_profile.location = location.clone();
+    config
+        .resolve_and_validate(Path::new("/srv/gateway"))
+        .expect("valid location");
+    assert_eq!(config.wire_profile_state().snapshot().location, location);
+}
+
+#[test]
+fn openai_config_should_reject_invalid_location_fields() {
+    for (field, value) in [
+        ("country", "USA"),
+        ("country", "us"),
+        ("country", ""),
+        ("region", " "),
+        ("city", ""),
+    ] {
+        let mut config = valid_config();
+        let (target, expected) = match field {
+            "country" => (
+                &mut config.wire_profile.location.country,
+                "openai.wire_profile.location.country",
+            ),
+            "region" => (
+                &mut config.wire_profile.location.region,
+                "openai.wire_profile.location.region",
+            ),
+            _ => (
+                &mut config.wire_profile.location.city,
+                "openai.wire_profile.location.city",
+            ),
+        };
+        *target = value.to_owned();
+        assert_eq!(
+            config.resolve_and_validate(Path::new("/srv/gateway")),
+            Err(OpenAiConfigError::InvalidField(expected))
+        );
+    }
+}
+
+#[test]
+fn location_config_should_reject_unknown_timezones_and_incomplete_groups() {
+    for value in [
+        json!({ "country": "US", "region": "Ohio", "city": "Piketon", "timezone": "Not/A_Timezone" }),
+        json!({ "timezone": "Pacific/Auckland" }),
+        json!({ "country": "US", "region": "Ohio", "city": "Piketon", "timezone": "America/New_York", "extra": true }),
+    ] {
+        assert!(serde_json::from_value::<CodexRequestLocation>(value).is_err());
+    }
+}
 
 #[test]
 fn openai_config_builds_the_audited_wire_profile() {
@@ -154,6 +223,7 @@ fn valid_config() -> OpenAiConfig {
         arch: "arm64".to_owned(),
         terminal: "xterm-256color".to_owned(),
         residency: None,
+        location: Default::default(),
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 19, 0, 0, 0)
             .single()
