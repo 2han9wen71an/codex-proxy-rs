@@ -4,7 +4,6 @@ use std::io;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
-use chrono_tz::America::New_York;
 use gateway_core::operation::GenerateRequest;
 use gateway_protocol::openai::{
     WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY, is_transport_managed_request_header,
@@ -12,9 +11,10 @@ use gateway_protocol::openai::{
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use roxmltree::Document;
 use serde::Serialize as _;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::transport::profile::CodexRequestLocation;
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, X_CODEX_TURN_STATE_CLIENT_METADATA_KEY,
 };
@@ -24,11 +24,6 @@ const TURN_ID_CLIENT_METADATA_KEY: &str = "turn_id";
 const THREAD_SPAWN_SUBAGENT_KIND: &str = "thread_spawn";
 const THREAD_SPAWN_CONVERSATION_PREFIX: &str = "thread-spawn:";
 const ENVIRONMENT_CONTEXT_CONTENT_KIND: &str = "environments.environment_context";
-// 请求中的地区画像以 PORTS 所在的 Piketon 为基准；epoch 时间戳仍保持绝对时间原值。
-const TARGET_COUNTRY: &str = "US";
-const TARGET_REGION: &str = "Ohio";
-const TARGET_CITY: &str = "Piketon";
-const TARGET_TIMEZONE: &str = "America/New_York";
 const UNSUPPORTED_CODEX_RESPONSES_FIELDS: &[&str] = &["max_output_tokens", "temperature"];
 
 const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
@@ -102,13 +97,14 @@ pub enum CodexRequestEncodeError {
 pub fn encode_generate_request(
     request: &GenerateRequest,
     upstream_model: &str,
+    location: &CodexRequestLocation,
 ) -> Result<CodexResponsesRequest, CodexRequestEncodeError> {
     let payload = request.protocol_payload();
     if payload.protocol() != "openai" {
         return Err(CodexRequestEncodeError::InvalidProtocolPayload);
     }
     let mut body = payload.body().clone();
-    adapt_codex_responses_body(&mut body, upstream_model);
+    adapt_codex_responses_body(&mut body, upstream_model, location);
 
     let mut encoded = CodexResponsesRequest::from_body(body);
     encoded.explicit_prompt_cache_key = encoded.prompt_cache_key().is_some();
@@ -117,29 +113,41 @@ pub fn encode_generate_request(
     Ok(encoded)
 }
 
-fn adapt_codex_responses_body(body: &mut Map<String, Value>, upstream_model: &str) {
+fn adapt_codex_responses_body(
+    body: &mut Map<String, Value>,
+    upstream_model: &str,
+    location: &CodexRequestLocation,
+) {
     body.insert("model".to_owned(), Value::String(upstream_model.to_owned()));
     for field in UNSUPPORTED_CODEX_RESPONSES_FIELDS {
         body.remove(*field);
     }
-    align_structured_location_fields(body, Utc::now());
+    align_structured_location_fields(body, Utc::now(), location);
 }
 
-fn align_structured_location_fields(body: &mut Map<String, Value>, now: DateTime<Utc>) {
-    let current_date = now.with_timezone(&New_York).format("%Y-%m-%d").to_string();
+fn align_structured_location_fields(
+    body: &mut Map<String, Value>,
+    now: DateTime<Utc>,
+    location: &CodexRequestLocation,
+) {
+    // 只改写带环境标记的日期和时区；epoch 时间戳保持绝对时间原值。
+    let current_date = now
+        .with_timezone(&location.timezone)
+        .format("%Y-%m-%d")
+        .to_string();
     if let Some(input) = body.get_mut("input").and_then(Value::as_array_mut) {
         for item in input {
-            align_environment_context(item, &current_date);
+            align_environment_context(item, &current_date, location.timezone.name());
         }
     }
     if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
         for tool in tools {
-            align_web_search_location(tool);
+            align_web_search_location(tool, location);
         }
     }
 }
 
-fn align_environment_context(item: &mut Value, current_date: &str) {
+fn align_environment_context(item: &mut Value, current_date: &str, timezone: &str) {
     let Some(item) = item.as_object_mut() else {
         return;
     };
@@ -178,13 +186,13 @@ fn align_environment_context(item: &mut Value, current_date: &str) {
         let Some(Value::String(text)) = part.get_mut("text") else {
             continue;
         };
-        if let Some(aligned) = aligned_environment_context(text, current_date) {
+        if let Some(aligned) = aligned_environment_context(text, current_date, timezone) {
             *text = aligned;
         }
     }
 }
 
-fn aligned_environment_context(text: &str, current_date: &str) -> Option<String> {
+fn aligned_environment_context(text: &str, current_date: &str, timezone: &str) -> Option<String> {
     let trimmed = text.trim();
     if !trimmed.starts_with("<environment_context>") || !trimmed.ends_with("</environment_context>")
     {
@@ -201,7 +209,7 @@ fn aligned_environment_context(text: &str, current_date: &str) -> Option<String>
         .filter_map(|node| {
             let replacement = match node.tag_name().name() {
                 "current_date" => format!("<current_date>{current_date}</current_date>"),
-                "timezone" => format!("<timezone>{TARGET_TIMEZONE}</timezone>"),
+                "timezone" => format!("<timezone>{timezone}</timezone>"),
                 _ => return None,
             };
             Some((node.range(), replacement))
@@ -218,7 +226,7 @@ fn aligned_environment_context(text: &str, current_date: &str) -> Option<String>
     Some(aligned)
 }
 
-fn align_web_search_location(tool: &mut Value) {
+fn align_web_search_location(tool: &mut Value, location: &CodexRequestLocation) {
     let Some(tool) = tool.as_object_mut() else {
         return;
     };
@@ -230,19 +238,13 @@ fn align_web_search_location(tool: &mut Value) {
     }
     tool.insert(
         "user_location".to_owned(),
-        Value::Object(Map::from_iter([
-            ("type".to_owned(), Value::String("approximate".to_owned())),
-            (
-                "country".to_owned(),
-                Value::String(TARGET_COUNTRY.to_owned()),
-            ),
-            ("region".to_owned(), Value::String(TARGET_REGION.to_owned())),
-            ("city".to_owned(), Value::String(TARGET_CITY.to_owned())),
-            (
-                "timezone".to_owned(),
-                Value::String(TARGET_TIMEZONE.to_owned()),
-            ),
-        ])),
+        json!({
+            "type": "approximate",
+            "country": location.country,
+            "region": location.region,
+            "city": location.city,
+            "timezone": location.timezone.name(),
+        }),
     );
 }
 

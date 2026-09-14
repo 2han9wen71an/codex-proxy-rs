@@ -138,6 +138,9 @@ fn wire_profile() -> CodexWireProfileState {
         arch: "x86_64".to_owned(),
         terminal: "provider-contract".to_owned(),
         residency: None,
+        location: serde_json::from_value(json!({
+            "country": "NZ", "region": "Auckland", "city": "Auckland", "timezone": "Pacific/Auckland"
+        })).expect("configured request location"),
         verified_at: Utc::now(),
     })
 }
@@ -662,6 +665,47 @@ async fn capture_scoped_http_request(
         .expect("captured scoped request");
     assert_eq!(requests.len(), 1);
     requests.pop().expect("single scoped request")
+}
+
+#[tokio::test]
+async fn provider_should_send_the_configured_location_to_the_upstream() {
+    let body = json!({
+        "model": "gpt-5.4",
+        "input": [{
+            "role": "user",
+            "content": [{"type": "input_text", "text": "<environment_context><timezone>UTC</timezone></environment_context>"}],
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["environments.environment_context"],
+                "create_time": 1789293131.822
+            }
+        }],
+        "tools": [{"type": "web_search"}]
+    }).as_object().expect("request object").clone();
+    let captured = capture_scoped_http_request(
+        "req_configured_location",
+        "acct_provider_contract",
+        "acct_provider_contract",
+        body,
+        Map::new(),
+    )
+    .await;
+    let body = captured_request_body(&captured);
+    assert_eq!(
+        body.pointer("/tools/0/user_location"),
+        Some(&json!({
+            "type": "approximate", "country": "NZ", "region": "Auckland", "city": "Auckland", "timezone": "Pacific/Auckland"
+        }))
+    );
+    assert_eq!(
+        body.pointer("/input/0/content/0/text"),
+        Some(&json!(
+            "<environment_context><timezone>Pacific/Auckland</timezone></environment_context>"
+        ))
+    );
+    assert_eq!(
+        body.pointer("/input/0/internal_chat_message_metadata_passthrough/create_time"),
+        Some(&json!(1789293131.822))
+    );
 }
 
 async fn capture_turn_state_request(
