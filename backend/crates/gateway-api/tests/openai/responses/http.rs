@@ -1573,6 +1573,78 @@ async fn streaming_upstream_wire_failure_should_not_be_rewritten_as_a_gateway_er
 }
 
 #[tokio::test]
+async fn streaming_upstream_error_event_should_be_translated_to_response_failed_for_sse() {
+    let trace = Arc::new(Trace::default());
+    // WS 上游的错误形态是 `error` 事件；SSE 协议里没有对应消费者，codex 等
+    // SSE 客户端会静默忽略未知事件类型，只能看到无原因的流 EOF。
+    let error_wire = ProviderEvent::wire(
+        ProtocolWireEvent::json(
+            "openai",
+            Some("error".to_owned()),
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "service_unavailable_error",
+                    "code": "server_is_overloaded",
+                    "message": "Our servers are currently overloaded. Please try again later.",
+                    "param": null
+                },
+                "sequence_number": 2
+            }),
+        )
+        .expect("valid upstream error wire"),
+    );
+    let started_wire = ProviderEvent::canonical_with_wire(
+        vec![started()],
+        ProtocolWireEvent::json(
+            "openai",
+            Some("response.created".to_owned()),
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": "resp_test",
+                    "model": "public-model",
+                    "status": "in_progress"
+                }
+            }),
+        )
+        .expect("valid upstream started wire"),
+    );
+    let session = FakeSession::streaming(
+        Arc::clone(&trace),
+        vec![
+            NextStep::Event(CoordinatedEvent::single(
+                started_wire,
+                CommitRequirement::CommitBeforeDelivery,
+            )),
+            NextStep::Event(CoordinatedEvent::single(
+                error_wire,
+                CommitRequirement::AlreadyCommitted,
+            )),
+            NextStep::Error(EngineError::Provider(ProviderError::new(
+                ProviderErrorKind::UpstreamCapacityUnavailable,
+                UpstreamSendState::Sent,
+            ))),
+        ],
+    );
+
+    let response = stream_execution_response(Box::new(session), None).await;
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read SSE body");
+    let body = String::from_utf8(body.to_vec()).expect("SSE is UTF-8");
+
+    // 原始 `error` 事件必须翻译成 SSE 协议的 `response.failed`，保留上游原话。
+    assert!(body.contains("event: response.failed"));
+    assert!(body.contains("Our servers are currently overloaded. Please try again later."));
+    assert!(body.contains("\"code\":\"server_is_overloaded\""));
+    assert!(body.contains("\"type\":\"service_unavailable_error\""));
+    assert!(body.contains("\"id\":\"resp_test\""));
+    assert!(!body.contains("event: error\n"));
+    assert!(body.ends_with("data: [DONE]\n\n"));
+}
+
+#[tokio::test]
 async fn atomic_uncommitted_upstream_failure_batch_should_be_forwarded_once() {
     let trace = Arc::new(Trace::default());
     let raw_created = Bytes::from_static(
