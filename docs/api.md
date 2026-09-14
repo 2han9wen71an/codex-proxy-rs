@@ -6,7 +6,7 @@
 
 ## 1. 鉴权与公共约定
 
-### 客户端接口
+### OpenAI 数据面客户端接口
 
 所有 `/v1/*` 请求都使用管理端创建的 Client Key：
 
@@ -49,9 +49,9 @@ Client Key 通过账号分组限定路由范围：未绑定分组时可使用全
 
 ### 管理接口
 
-除登录、会话状态和登出外，所有 `/api/admin/*` 请求都需要以下任一鉴权方式：
+所有 `/api/admin/*` 请求都需要以下任一鉴权方式：
 
-- 浏览器登录后得到的 `cpr_admin_session` Cookie；
+- 管理员登录后得到的 `cpr_session` Cookie（服务端会话身份必须为 `admin`）；
 - `x-api-key: <admin-api-key>`。
 
 同源管理端的登录和退出根据浏览器 `Origin` 自动设置会话 Cookie：HTTP 来源省略 `Secure`，
@@ -94,7 +94,8 @@ HTTPS 来源以及缺失、`null` 或非法来源保留 `Secure`。`HttpOnly`、
 | 400 | `40000` | 请求体不是合法 JSON |
 | 400 / 405 / 415 / 422 | `40001` | 通用请求、方法、Content-Type 或字段错误；HTTP 状态保留具体语义 |
 | 400 | `40002` | 时间范围不合法 |
-| 401 | `40101` / `40102` / `40103` | 缺少管理员会话 / 登录凭据错误 / 管理 API Key 错误 |
+| 401 | `40101` / `40102` / `40103` | 会话缺失、过期或吊销 / 登录凭据错误 / 管理 API Key 错误 |
+| 403 | `40301` | 有效会话的身份无权访问目标接口；不清除会话 |
 | 404 | `40401` | 资源或管理接口不存在 |
 | 409 | `40901` | 资源状态冲突 |
 | 429 | `42901` | 登录尝试过多 |
@@ -236,13 +237,63 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 明确额度耗尽继续走现有账号隔离与安全换号流程，
 包括 WebSocket 握手返回的 429；不会因其长 `Retry-After` 而转入同账号传输恢复等待。
 
-## 4. 管理员认证
+## 4. 浏览器认证
+
+### 统一登录与会话
+
+管理员和密钥登录共用 `/api/auth/*`。登录类型只用于选择凭据验证方式，不直接授予权限；
+验证成功后，由后端写入身份和绑定 ID。一个浏览器只持有一份 `cpr_session` HttpOnly Cookie，
+原始 Key 不进入 URL、Pinia 或浏览器存储。登录页的切换只改变本地表单，不改变 URL。
 
 | 方法 | 路由 | 请求 | 说明 |
 | --- | --- | --- | --- |
-| `POST` | `/api/admin/auth/login` | `{ username?, password }` | 创建管理员会话并设置 Cookie |
-| `GET` | `/api/admin/auth/status` | 无 | 返回当前 Cookie 是否已认证 |
-| `POST` | `/api/admin/auth/logout` | 无 | 删除当前会话并清除 Cookie |
+| `POST` | `/api/auth/login` | `{ type: "admin", username?, password }` 或 `{ type: "key", apiKey }` | 验证凭据、创建会话；成功后撤销请求携带的旧会话 |
+| `GET` | `/api/auth/status` | 无 | 从 Cookie 恢复服务端身份，返回 `{ authenticated, session }` |
+| `POST` | `/api/auth/logout` | 无 | 删除当前会话并清除 Cookie；存储失败返回 503，不假装退出成功 |
+
+登录返回 `data: { type: "admin" | "key", expiresAt }`；status 已登录时的 `session` 使用同一结构，
+未登录时为 `{ authenticated: false, session: null }`。不返回凭据或绑定 ID，Key 的名称和掩码只在用量响应中返回。
+
+Redis 统一保存身份（管理员 ID 或 Client Key ID）和绝对有效期，不保存密码或原始 Key。
+使用 `auth:v1` 命名空间，Cookie 属性为 `Path=/; HttpOnly; SameSite=Lax`，`Max-Age` /
+`Expires` 对齐固定有效期，`Secure` 沿用上述 Origin 规则。轮询不会续期。
+管理员有效期由 `admin.session_ttl_minutes` 控制；密钥有效期由 `client.session_ttl_minutes` 控制，默认 1440 分钟。
+
+每次恢复密钥会话时重新确认 Key 存在且启用；停用或删除后会话失效，重新启用不会恢复已撤销会话。
+依赖不可用时返回 503，不返回已认证或假装未登录。预算耗尽不妨碍登录和查询。
+原有两套认证路由和 Cookie 不再接受，升级后需要重新登录。
+
+### API Key 自助用量
+
+密钥会话只能访问以下只读接口；管理员会话访问它们返回 403，密钥会话访问管理接口同样返回 403。
+浏览器会话不能替代 `/v1/*` 的 Bearer Key，数据面 Key 也不能替代浏览器会话。
+
+| 方法 | 路由 | Query | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/api/client/usage` | `range=24h\|7d\|30d`，默认 `7d` | 当前会话 Key 的账本、限制、汇总与趋势 |
+| `GET` | `/api/client/usage/records` | `range`、必填 `endsAt`；可选 `beforeAt`、`beforeId`、`limit` | 独立查询当前会话 Key 的调用明细 |
+| `GET` | `/api/client/system/version` | 无 | 仅返回 `{ version }`，不返回管理部署或更新信息 |
+
+明细响应的 `data` 为 `{ items, nextCursor }`，按 `(startedAt, id)` 倒序，每页默认 20 条，
+`limit` 范围为 1–100。每项仅含 `id`、`startedAt`、`model`、`outcome`、`totalTokens`、`latencyMs`
+和 `cost: { amount, currency } | null`；缺失 Token、耗时或成本保留 `null`，不伪装成零。
+明细覆盖执行层记录的成功、失败、取消、未完成与进行中调用，不包含账号、上游凭据或请求内容。
+明细首屏与翻页均使用概览响应的 `activity.range.kind` / `activity.range.endsAt` 作为 `range` / `endsAt`，
+服务端计算同一个起止窗口。翻页将 `nextCursor` 的 `startedAt` / `id` 传入 `beforeAt` / `beforeId`，两项必须成对。
+`nextCursor: null` 表示已到底。所有查询的 Key 都由服务端会话确定，不接受客户端指定 Key 或账号。
+
+所有 `/api/auth/*` 和 `/api/client/*` 响应带 `Cache-Control: no-store`；
+未知路径和错误 method 返回 JSON，不落入 SPA。两种登录共享来源桶和全局桶，分别为每 60 秒
+10 次 / 200 次；来源取连接 IP，不信任任意转发头。拒绝时使用 `42901` 和 `Retry-After`。
+
+认证错误共用 `40101`（会话失效）、`40102`（凭据错误）和 `40301`（权限不足）。
+前端只在明确的会话失效时统一退出，不按 URL 或每个接口上的身份标记分发。
+
+用量响应的金额均为十进制
+字符串，日期为 RFC3339，预算显示时区为 `Asia/Shanghai`；`limitUsd: "0"` 表示不限额，
+`remainingUsd` 此时为 `null`。activity 的 `costCoverage` 同时返回
+`providerReportedCount`、`calculatedCount`、`partialCount`、`unavailableCount` 和
+`notBillableCount`。服务端从会话强制注入 Client Key ID，接口不接受调用方指定其他 Key。
 
 ## 5. 账号
 

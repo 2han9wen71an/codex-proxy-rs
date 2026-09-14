@@ -1,26 +1,27 @@
 import type { RequestOptions } from '../request'
 import request from '../request'
 
-export interface LoginResponse {
+export interface AuthSession {
+  type: 'admin' | 'key'
   expiresAt: string
 }
 
+export type LoginParam
+  = | { type: 'admin', username: string, password: string }
+    | { type: 'key', apiKey: string }
+
 export interface AuthStatusResponse {
   authenticated: boolean
+  session: AuthSession | null
 }
 
 export interface LogoutResponse {
   message: string
 }
 
-interface LoginParam {
-  username: string
-  password: string
-}
-
 export function login(data: LoginParam, options: RequestOptions = {}) {
-  return request<LoginResponse>({
-    url: '/api/admin/auth/login',
+  return request<AuthSession>({
+    url: '/api/auth/login',
     method: 'POST',
     data,
     ...options,
@@ -29,7 +30,7 @@ export function login(data: LoginParam, options: RequestOptions = {}) {
 
 export function getAuthStatus(options: RequestOptions = {}) {
   return request<AuthStatusResponse>({
-    url: '/api/admin/auth/status',
+    url: '/api/auth/status',
     method: 'GET',
     ...options,
   })
@@ -37,7 +38,7 @@ export function getAuthStatus(options: RequestOptions = {}) {
 
 export function logout(options: RequestOptions = {}) {
   return request<LogoutResponse>({
-    url: '/api/admin/auth/logout',
+    url: '/api/auth/logout',
     method: 'POST',
     ...options,
   })

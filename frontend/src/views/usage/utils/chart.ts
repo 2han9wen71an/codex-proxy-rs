@@ -101,9 +101,11 @@ export function usageTooltipContent(
   theme: UsageChartPalette,
   label: string,
   lines: string[],
+  options: { divider?: boolean } = {},
 ) {
   const title = escapeTooltip(label)
-  return `<div style="margin:0 0 7px;padding:0 0 7px;border-bottom:1px solid ${theme.divider};color:${theme.textPrimary};font-family:'JetBrains Mono Variable','JetBrains Mono',monospace;font-size:11px;font-weight:750;line-height:1.2">${title}</div><div style="line-height:1.55">${lines.join('<br/>')}</div>`
+  const divider = options.divider === false ? '' : `border-bottom:1px solid ${theme.divider};`
+  return `<div style="margin:0 0 7px;padding:0 0 7px;${divider}color:${theme.textPrimary};font-family:'JetBrains Mono Variable','JetBrains Mono',monospace;font-size:11px;font-weight:750;line-height:1.2">${title}</div><div style="line-height:1.55">${lines.join('<br/>')}</div>`
 }
 
 export function usageTooltipItem(label: string, value: string, color: string) {

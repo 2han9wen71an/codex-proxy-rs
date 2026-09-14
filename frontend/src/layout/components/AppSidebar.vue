@@ -107,7 +107,8 @@ function openSystemUpdate() {
 }
 
 async function handleLogout() {
-  await authStore.logout()
+  if (!await authStore.logout())
+    return
   await router.push('/login')
   emit('navigate')
 }

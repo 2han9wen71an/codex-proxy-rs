@@ -279,6 +279,23 @@ fn config_loader_should_reject_admin_password_with_compose_interpolation() {
 }
 
 #[test]
+fn config_loader_should_reject_zero_client_session_ttl() {
+    assert_rejected(valid_config().replace(
+        "client:\n  # API Key 登录域的独立固定会话有效期。\n  session_ttl_minutes: 1440",
+        "client:\n  session_ttl_minutes: 0",
+    ));
+}
+
+#[test]
+fn config_loader_should_default_missing_client_section() {
+    let config = valid_config().replace(
+        "\nclient:\n  # API Key 登录域的独立固定会话有效期。\n  session_ttl_minutes: 1440\n",
+        "\n",
+    );
+    assert!(parse_config(&config).is_ok());
+}
+
+#[test]
 fn config_loader_should_reject_removed_fingerprint_section() {
     assert_rejected(valid_config().replace(
         "openai:\n",
