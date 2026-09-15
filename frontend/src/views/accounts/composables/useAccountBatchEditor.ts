@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import type { AccountModelAccess, getAccounts } from '@/api'
 
-import { ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { batchUpdateAccounts } from '@/api'
 import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
@@ -22,13 +22,25 @@ export function useAccountBatchEditor(options: {
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
-  const updateScheduling = shallowRef(false)
+  const editedFields = ref(new Set<'enabled' | 'concurrencyLimit' | 'weight' | 'groupIds'>())
   const catalogAccountId = shallowRef<string>()
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
+  const hasChanges = computed(() => Boolean(modelAccess.value) || editedFields.value.size > 0 || proxyMode.value !== 'preserve')
+
+  // 未操作的字段保持每个账号原值，避免展开表单就覆盖混合设置。
+  watch([schedulingEnabled, concurrencyLimit, weight, selectedGroupIds], (values, previous) => {
+    if (!showBatchEditModal.value || saving.value)
+      return
+    const fields = ['enabled', 'concurrencyLimit', 'weight', 'groupIds'] as const
+    fields.forEach((field, index) => {
+      if (values[index] !== previous[index])
+        editedFields.value.add(field)
+    })
+  }, { flush: 'sync' })
 
   function open() {
     const accounts = selectedAccounts()
@@ -36,7 +48,7 @@ export function useAccountBatchEditor(options: {
       return
 
     modelAccess.value = undefined
-    updateScheduling.value = false
+    editedFields.value.clear()
     catalogAccountId.value = accounts[0]?.id
     schedulingEnabled.value = accounts.every(account => account.enabled)
     proxyMode.value = 'preserve'
@@ -55,12 +67,12 @@ export function useAccountBatchEditor(options: {
       toast.warning(modelError)
       return
     }
-    if (!updateScheduling.value && !modelAccess.value) {
+    if (!hasChanges.value) {
       toast.warning('请选择需要更新的设置')
       return
     }
-    const scheduling = parseAccountSchedulingForm(updateScheduling.value ? concurrencyLimit.value : '', updateScheduling.value ? weight.value : '1')
-    if (updateScheduling.value && proxyMode.value === 'proxy' && !proxyId.value.trim()) {
+    const scheduling = parseAccountSchedulingForm(editedFields.value.has('concurrencyLimit') ? concurrencyLimit.value : '', editedFields.value.has('weight') ? weight.value : '1')
+    if (proxyMode.value === 'proxy' && !proxyId.value.trim()) {
       toast.warning('请选择已通过测试的代理')
       return
     }
@@ -74,15 +86,11 @@ export function useAccountBatchEditor(options: {
       await batchUpdateAccounts({
         accountIds,
         modelAccess: modelAccess.value,
-        ...(updateScheduling.value
-          ? {
-              outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
-              enabled: schedulingEnabled.value,
-              concurrencyLimit: scheduling.values.concurrencyLimit,
-              weight: scheduling.values.weight,
-              groupIds: [...new Set(selectedGroupIds.value)],
-            }
-          : {}),
+        outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
+        enabled: editedFields.value.has('enabled') ? schedulingEnabled.value : undefined,
+        concurrencyLimit: editedFields.value.has('concurrencyLimit') ? scheduling.values.concurrencyLimit : undefined,
+        weight: editedFields.value.has('weight') ? scheduling.values.weight : undefined,
+        groupIds: editedFields.value.has('groupIds') ? [...new Set(selectedGroupIds.value)] : undefined,
       })
       showBatchEditModal.value = false
       options.selectedIds.value = new Set()
@@ -132,7 +140,7 @@ export function useAccountBatchEditor(options: {
     concurrencyLimit,
     weight,
     modelAccess,
-    updateScheduling,
+    hasChanges,
     catalogAccountId,
     proxyMode,
     proxyId,

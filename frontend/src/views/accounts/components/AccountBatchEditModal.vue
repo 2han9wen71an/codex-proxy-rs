@@ -2,7 +2,6 @@
 import type { AccountGroup, AccountModelAccess } from '@/api'
 
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseModal from '@/components/base/BaseModal/index.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
@@ -12,6 +11,7 @@ defineProps<{
   groups: AccountGroup[]
   groupsLoading: boolean
   saving: boolean
+  hasChanges: boolean
 }>()
 
 const emit = defineEmits<{
@@ -22,7 +22,6 @@ const open = defineModel<boolean>({ required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
-const updateScheduling = defineModel<boolean>('updateScheduling', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
@@ -38,7 +37,6 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
     :dismissible="!saving"
   >
     <div class="grid gap-5">
-      <BaseCheckbox v-model="updateScheduling" label="同时更新调度、分组和代理设置" show-label :disabled="saving" />
       <AccountSettingsFields
         v-model:enabled="enabled"
         v-model:concurrency-limit="concurrencyLimit"
@@ -48,7 +46,6 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         v-model:proxy-mode="proxyMode"
         v-model:proxy-id="proxyId"
         preserve-model-access
-        :model-only="!updateScheduling"
         :account-id="catalogAccountId"
         :groups="groups"
         :groups-loading="groupsLoading"
@@ -63,7 +60,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
       <BaseButton
         variant="primary"
         :loading="saving"
-        :disabled="selectedCount === 0 || (updateScheduling && groupsLoading) || (!updateScheduling && !modelAccess)"
+        :disabled="selectedCount === 0 || groupsLoading || !hasChanges"
         @click="emit('save')"
       >
         保存更改

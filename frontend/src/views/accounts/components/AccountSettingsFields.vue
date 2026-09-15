@@ -15,7 +15,6 @@ withDefaults(defineProps<{
   accountId?: string
   preserveProxy?: boolean
   preserveModelAccess?: boolean
-  modelOnly?: boolean
   proxyError?: string
 }>(), { preserveProxy: true })
 
@@ -31,50 +30,48 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
 <template>
   <div class="grid gap-5">
     <AccountModelAccessField v-model="modelAccess" :account-id="accountId" :disabled="disabled" :allow-preserve="preserveModelAccess" />
-    <template v-if="!modelOnly">
-      <div class="flex min-h-6 items-center justify-between gap-3">
-        <span class="text-cp leading-none font-medium text-cp-text-secondary">调度</span>
-        <BaseSwitch
-          v-model="enabled"
-          label="切换账号调度"
-          :disabled="disabled"
-        />
-      </div>
+    <div class="flex min-h-6 items-center justify-between gap-3">
+      <span class="text-cp leading-none font-medium text-cp-text-secondary">调度</span>
+      <BaseSwitch
+        v-model="enabled"
+        label="切换账号调度"
+        :disabled="disabled"
+      />
+    </div>
 
-      <div class="grid gap-4 sm:grid-cols-2">
-        <BaseFormItem label="并发限制">
-          <BaseInput
-            v-model="concurrencyLimit"
-            aria-label="账号并发限制"
-            type="number"
-            min="1"
-            max="4294967295"
-            placeholder="留空使用默认值"
-            :disabled="disabled"
-          />
-        </BaseFormItem>
-        <BaseFormItem label="权重">
-          <BaseInput
-            v-model="weight"
-            aria-label="账号调度权重"
-            type="number"
-            min="1"
-            max="100"
-            placeholder="越高越优先，最大 100"
-            :disabled="disabled"
-          />
-        </BaseFormItem>
-      </div>
-
-      <BaseFormItem label="所属分组">
-        <AccountGroupCheckboxGrid
-          v-model="selectedGroupIds"
-          :groups="groups"
-          :loading="groupsLoading"
+    <div class="grid gap-4 sm:grid-cols-2">
+      <BaseFormItem label="并发限制">
+        <BaseInput
+          v-model="concurrencyLimit"
+          aria-label="账号并发限制"
+          type="number"
+          min="1"
+          max="4294967295"
+          placeholder="留空使用默认值"
           :disabled="disabled"
         />
       </BaseFormItem>
-      <AccountProxyField v-model:mode="proxyMode" v-model:proxy-id="proxyId" :preserve="preserveProxy" :error="proxyError" :endpoint="endpoint" :account-id="accountId" :disabled="disabled" />
-    </template>
+      <BaseFormItem label="权重">
+        <BaseInput
+          v-model="weight"
+          aria-label="账号调度权重"
+          type="number"
+          min="1"
+          max="100"
+          placeholder="越高越优先，最大 100"
+          :disabled="disabled"
+        />
+      </BaseFormItem>
+    </div>
+
+    <BaseFormItem label="所属分组">
+      <AccountGroupCheckboxGrid
+        v-model="selectedGroupIds"
+        :groups="groups"
+        :loading="groupsLoading"
+        :disabled="disabled"
+      />
+    </BaseFormItem>
+    <AccountProxyField v-model:mode="proxyMode" v-model:proxy-id="proxyId" :preserve="preserveProxy" :error="proxyError" :endpoint="endpoint" :account-id="accountId" :disabled="disabled" />
   </div>
 </template>

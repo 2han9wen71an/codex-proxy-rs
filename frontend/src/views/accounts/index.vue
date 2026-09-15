@@ -129,7 +129,7 @@ const {
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
   modelAccess: batchModelAccess,
-  updateScheduling: batchUpdateScheduling,
+  hasChanges: batchHasChanges,
   catalogAccountId: batchCatalogAccountId,
   proxyMode: batchProxyMode,
   proxyId: batchProxyId,
@@ -375,7 +375,6 @@ const {
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"
       v-model:model-access="batchModelAccess"
-      v-model:update-scheduling="batchUpdateScheduling"
       v-model:proxy-mode="batchProxyMode"
       v-model:proxy-id="batchProxyId"
       v-model:selected-group-ids="batchGroupIds"
@@ -384,6 +383,7 @@ const {
       :groups="groups"
       :groups-loading="groupsLoading"
       :saving="savingBatchEdit"
+      :has-changes="batchHasChanges"
       @save="saveBatchEdit"
     />
 

@@ -25,8 +25,8 @@ const metrics = computed(() => [
   <section class="grid min-w-0 gap-4 xl:grid-cols-[minmax(340px,0.95fr)_minmax(0,3fr)]" aria-label="用量汇总">
     <BaseCard as="article" padding="compact" class="flex min-h-28 min-w-0 flex-col justify-between gap-4">
       <div class="flex min-w-0 flex-1 items-center gap-3">
-        <BaseMotionIcon class="inline-flex size-8.5 shrink-0 items-center justify-center rounded-cp-lg bg-cp-info-container text-cp-info-on-container" aria-hidden="true">
-          <Zap :size="18" />
+        <BaseMotionIcon class="inline-flex size-9 shrink-0 items-center relative -top-0.5 justify-center rounded-cp-lg bg-cp-info-container text-cp-info-on-container" aria-hidden="true">
+          <Zap :size="19" />
         </BaseMotionIcon>
         <span class="sr-only">消耗 Tokens</span>
         <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
