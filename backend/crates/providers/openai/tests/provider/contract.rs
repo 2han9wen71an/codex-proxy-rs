@@ -5587,7 +5587,22 @@ fn capacity_websocket_operation() -> Operation {
         "downstream_websocket_connection_id".to_owned(),
         json!("ws_capacity_feedback"),
     )]));
-    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+    Operation::Generate(
+        GenerateRequest::from_protocol_payload(payload).with_provider_session_state(
+            ProviderSessionState::new(
+                "openai",
+                Map::from_iter([
+                    ("account_id".to_owned(), json!("acct_provider_contract")),
+                    (
+                        "conversation_id".to_owned(),
+                        json!("capacity-feedback-session"),
+                    ),
+                    ("continuation_scope".to_owned(), json!("persisted")),
+                ]),
+            )
+            .expect("WebSocket session scope"),
+        ),
+    )
 }
 
 fn provider_with_capacity_tracking(
@@ -5678,7 +5693,11 @@ async fn capacity_feedback_counts_business_rejections_but_excludes_diagnostic_pr
                             None => panic!("expected upstream rejection"),
                         }
                     };
-                    assert_eq!(error.upstream_status(), Some(status));
+                    assert_eq!(
+                        error.upstream_status(),
+                        Some(status),
+                        "unexpected upstream error: {error:?}"
+                    );
                     let after = cooldowns.capacity_evidence(account.id());
                     if diagnostic {
                         assert_eq!(after, before, "probe must preserve capacity count and peak");
