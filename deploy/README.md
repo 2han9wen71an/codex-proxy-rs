@@ -314,7 +314,7 @@ OpenAI 主动额度重置卡及其消费结果由上游持有，不写入 Postgr
    按配置的保留窗口及组织的数据处理要求管理已生成文件。不要为普通请求排查开启 OAuth 恢复记录，
    也不要直接上传整个日志目录或完整转储。
 
-反馈入口见 [Issue 表单](../.github/ISSUE_TEMPLATE/bug_report.yml)；错误诊断与查询合同见
+请求问题反馈使用 [接口问题反馈表单](../.github/ISSUE_TEMPLATE/api-bug-report.yml)；错误诊断与查询合同见
 [API 文档](../docs/api.md#10-dashboard用量与错误)。
 
 ## 密码语义
