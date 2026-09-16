@@ -4,11 +4,8 @@ mod auth;
 mod auth_key;
 mod backup;
 mod client_keys;
-<<<<<<< HEAD
-mod import_tasks;
-=======
 mod freeze_recovery;
->>>>>>> 69255ad1 (feat(store,admin): persist account auto-freeze settings and kind-tagged cooldowns)
+mod import_tasks;
 mod observability;
 mod openai;
 mod proxies;

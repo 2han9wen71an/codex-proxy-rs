@@ -489,7 +489,15 @@ Worker 由各 Bundle 贡献、由 Host 统一监督：
 - Store：过期请求恢复、历史保留和 PostgreSQL/Redis 观测队列；
 - Core：`runtime` owner 的 RuntimeSnapshot 周期对账和 Redis change 订阅；
 - Admin：S3/R2 备份 daemon，负责调度、执行、删除收敛与保留清理；
+  以及账号冻结恢复 worker（容量熔断的自适应并发下调与到期探测解冻）；
 - Provider：credential refresh、quota/catalog 健康和官方版本/etag 检查。
+
+账号容量熔断的事实边界：容量类上游错误（`server_is_overloaded` 等与 5xx 不可用）不证明凭据或配额
+问题，不进入账号失败状态；Provider 在失败路径按滑动窗口计数并把观测到的在途并发并入峰值证据，
+达到阈值后写入带 `capacity_freeze` 类别的账号级 Redis 冷却，调度立即跳过该账号。冻结与计数都是
+可丢失的 Redis 事实，不改变 PostgreSQL 账号状态；恢复 worker 在到期前复用连接测试探针执行一次
+真实上游调用，成功才清除冷却，失败按配置时长顺延，并把账号并发上限下调到观测峰值的 80%
+（下限 2，只降不升，审计标注为系统变更）。
 
 周期任务的 Redis lease 只保证单周期互斥，不构成多副本 leader 选举。备份 daemon 依赖单副本部署边界，
 自更新也只替换处理请求的当前进程，因此整个应用必须保持单副本。
