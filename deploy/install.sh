@@ -137,54 +137,51 @@ validate_admin_password() {
   if [[ "$password" == *'$'* ]]; then
     die 'ADMIN_PASSWORD 不能包含 $ 字符。'
   fi
+  if [[ "$password" =~ [[:cntrl:]] ]]; then
+    die "ADMIN_PASSWORD 不能包含换行或其他控制字符。"
+  fi
   normalized="$(printf '%s' "$password" | tr '[:upper:]' '[:lower:]')"
   if [[ "$normalized" == "codex-proxy-rs" ]]; then
     die "ADMIN_PASSWORD 不能使用常见弱口令。"
   fi
 }
 
+yaml_single_quote() {
+  local value="${1//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+
 patch_config() {
-  local postgres_password="$1"
-  local redis_password="$2"
-  local admin_password="$3"
+  local postgres_password redis_password admin_password
+  local postgres_count=0 redis_count=0 admin_count=0
+  local line rendered=''
+  local postgres_pattern="^([[:blank:]]*password:[[:blank:]]*&postgres_password[[:blank:]]*)''[[:blank:]]*$"
+  local redis_pattern="^([[:blank:]]*password:[[:blank:]]*&redis_password[[:blank:]]*)''[[:blank:]]*$"
+  local admin_pattern="^([[:blank:]]*default_password:[[:blank:]]*)''[[:blank:]]*$"
 
-  POSTGRES_PASSWORD_VALUE="$postgres_password" \
-    REDIS_PASSWORD_VALUE="$redis_password" \
-    ADMIN_PASSWORD_VALUE="$admin_password" \
-    python3 - "$CONFIG_EXAMPLE" "$CONFIG_FILE" <<'PY'
-import os
-import re
-import sys
-from pathlib import Path
+  postgres_password="$(yaml_single_quote "$1")"
+  redis_password="$(yaml_single_quote "$2")"
+  admin_password="$(yaml_single_quote "$3")"
 
-source = Path(sys.argv[1])
-destination = Path(sys.argv[2])
-content = source.read_text(encoding="utf-8")
+  # 按模板中的空密码占位替换；先完整检查，再写文件，避免留下半份配置。
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" =~ $postgres_pattern ]]; then
+      line="${BASH_REMATCH[1]}${postgres_password}"
+      postgres_count=$((postgres_count + 1))
+    elif [[ "$line" =~ $redis_pattern ]]; then
+      line="${BASH_REMATCH[1]}${redis_password}"
+      redis_count=$((redis_count + 1))
+    elif [[ "$line" =~ $admin_pattern ]]; then
+      line="${BASH_REMATCH[1]}${admin_password}"
+      admin_count=$((admin_count + 1))
+    fi
+    rendered+="$line"$'\n'
+  done < "$CONFIG_EXAMPLE"
 
-
-def yaml_single_quote(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-replacements = (
-    (r"(?m)^(\s*password:\s*&postgres_password\s*)''\s*$", os.environ["POSTGRES_PASSWORD_VALUE"]),
-    (r"(?m)^(\s*password:\s*&redis_password\s*)''\s*$", os.environ["REDIS_PASSWORD_VALUE"]),
-    (r"(?m)^(\s*default_password:\s*)''\s*$", os.environ["ADMIN_PASSWORD_VALUE"]),
-)
-for pattern, value in replacements:
-    content, count = re.subn(
-        pattern,
-        lambda match, replacement=value: match.group(1) + yaml_single_quote(replacement),
-        content,
-        count=1,
-    )
-    if count != 1:
-        raise SystemExit(
-            "config.example.yaml 结构与安装脚本预期不一致，已停止以免生成错误配置。"
-        )
-
-destination.write_text(content, encoding="utf-8")
-PY
+  if (( postgres_count != 1 || redis_count != 1 || admin_count != 1 )); then
+    die "config.example.yaml 结构与安装脚本预期不一致，已停止以免生成错误配置。"
+  fi
+  printf '%s' "$rendered" > "$CONFIG_FILE"
 }
 
 service_user_ids() {
@@ -265,7 +262,6 @@ main() {
   need_cmd docker
   need_cmd install
   need_cmd openssl
-  need_cmd python3
 
   docker info >/dev/null 2>&1 \
     || die "Docker daemon 不可用；请先安装、启动 Docker，并确认当前用户可以访问。"
@@ -368,4 +364,6 @@ main() {
   printf '\n'
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
