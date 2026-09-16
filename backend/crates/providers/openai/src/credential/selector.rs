@@ -365,7 +365,9 @@ impl CodexCredentialSelector {
             let diagnostic = request.attempt.is_diagnostic_required_account();
             let accounts = self.repository.list_for_provider().await?;
             let mut model_access_rejected = 0_usize;
-            let accounts = accounts
+            // store 侧常规调度列表不包含停用账号；管理端诊断要对固定账号执行真实上游
+            // 验证，这里把不在列表里的 required 账号显式补回候选。
+            let mut accounts = accounts
                 .into_iter()
                 .filter(|account| {
                     account.provider() == &self.provider_kind
@@ -392,6 +394,19 @@ impl CodexCredentialSelector {
                             })
                 })
                 .collect::<Vec<_>>();
+            if diagnostic
+                && let Some(required) = request.attempt.required_account()
+                && !accounts.iter().any(|account| account.id() == required)
+                && let Some(account) = self
+                    .repository
+                    .store()
+                    .get_account(required)
+                    .await
+                    .map_err(|_| CredentialSelectionError::Store)?
+                && account.provider() == &self.provider_kind
+            {
+                accounts.push(account);
+            }
             if model_access_rejected > 0 && request.attempt.trace().is_enabled() {
                 request.attempt.trace().record(
                     "account.model_access",
