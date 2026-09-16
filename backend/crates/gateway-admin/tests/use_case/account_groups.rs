@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use gateway_admin::{
     model::{
         MutationContext, PageSize, Revision,
@@ -174,6 +174,34 @@ impl AccountRuntimeStore for FakeRuntimeStore {
             )]),
             in_flight: Some(BTreeMap::from([("acct_available".to_owned(), 2)])),
         })
+    }
+
+    async fn active_freezes(&self) -> AdminStoreResult<BTreeMap<String, DateTime<Utc>>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn capacity_peaks(
+        &self,
+        _account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, u32>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn clear_rate_limit(
+        &self,
+        _account_id: &str,
+        _through_revision: Revision,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn extend_rate_limit(
+        &self,
+        _account_id: &str,
+        _through_revision: Revision,
+        _until: DateTime<Utc>,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
     }
 }
 

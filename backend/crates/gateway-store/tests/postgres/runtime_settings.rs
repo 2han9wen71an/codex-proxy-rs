@@ -27,6 +27,13 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         usage_retention_days: 31,
         ops_event_retention_days: 30,
         audit_retention_days: 90,
+        account_auto_freeze_enabled: true,
+        account_auto_freeze_threshold: 12,
+        account_auto_freeze_window_seconds: 600,
+        account_auto_freeze_duration_seconds: 7_200,
+        account_auto_freeze_probe_enabled: true,
+        account_auto_freeze_probe_model: None,
+        account_auto_freeze_adaptive_concurrency: true,
     }
 }
 
@@ -44,6 +51,30 @@ fn runtime_settings_reject_invalid_model_mapping() {
     };
 
     assert!(settings.validate().is_err());
+}
+
+#[test]
+fn runtime_settings_reject_out_of_range_auto_freeze() {
+    for update in [
+        RuntimeSettingsUpdate {
+            account_auto_freeze_threshold: 1,
+            ..settings_with_margin(3_600)
+        },
+        RuntimeSettingsUpdate {
+            account_auto_freeze_window_seconds: 59,
+            ..settings_with_margin(3_600)
+        },
+        RuntimeSettingsUpdate {
+            account_auto_freeze_duration_seconds: 299,
+            ..settings_with_margin(3_600)
+        },
+        RuntimeSettingsUpdate {
+            account_auto_freeze_probe_model: Some(" pad ".to_owned()),
+            ..settings_with_margin(3_600)
+        },
+    ] {
+        assert!(update.validate().is_err());
+    }
 }
 
 #[test]

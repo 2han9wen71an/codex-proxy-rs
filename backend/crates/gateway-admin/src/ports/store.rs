@@ -2,7 +2,7 @@
 //!
 //! 端口按业务资源拆分，方法使用领域模型，不暴露连接池、事务或 Redis client。
 
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, net::IpAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -193,6 +193,30 @@ pub trait AccountRuntimeStore: Send + Sync {
         &self,
         account_ids: &[String],
     ) -> AdminStoreResult<AccountRuntimeSnapshot>;
+
+    /// 容量熔断自动冻结中的账号与其冻结截止时间；429 临时限流不包含在内。
+    async fn active_freezes(&self) -> AdminStoreResult<BTreeMap<String, DateTime<Utc>>>;
+
+    /// 读取容量失败窗口内观测到的在途并发峰值（自适应并发下调的证据）。
+    async fn capacity_peaks(
+        &self,
+        account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, u32>>;
+
+    /// 按 credential revision 防腐清除账号冷却；恢复 worker 解冻时使用。
+    async fn clear_rate_limit(
+        &self,
+        account_id: &str,
+        through_revision: Revision,
+    ) -> AdminStoreResult<bool>;
+
+    /// 探测失败后把账号冷却顺延到 `until`；revision 防腐，已有更晚冷却不回退。
+    async fn extend_rate_limit(
+        &self,
+        account_id: &str,
+        through_revision: Revision,
+        until: DateTime<Utc>,
+    ) -> AdminStoreResult<bool>;
 }
 
 /// 控制面凭据、统一会话、登录限流与管理员安全审计。

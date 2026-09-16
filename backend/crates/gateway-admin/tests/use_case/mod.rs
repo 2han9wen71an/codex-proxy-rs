@@ -4,7 +4,11 @@ mod auth;
 mod auth_key;
 mod backup;
 mod client_keys;
+<<<<<<< HEAD
 mod import_tasks;
+=======
+mod freeze_recovery;
+>>>>>>> 69255ad1 (feat(store,admin): persist account auto-freeze settings and kind-tagged cooldowns)
 mod observability;
 mod openai;
 mod proxies;
@@ -82,6 +86,7 @@ use gateway_core::{
     routing::{ConfigRevision, ProviderKind},
     runtime::SnapshotControl,
 };
+use std::collections::BTreeMap;
 
 pub(super) struct AdminHarness {
     default_password: String,
@@ -529,6 +534,34 @@ impl AccountRuntimeStore for UnavailableStore {
 
     async fn account_runtime(&self, _: &[String]) -> AdminStoreResult<AccountRuntimeSnapshot> {
         Ok(AccountRuntimeSnapshot::default())
+    }
+
+    async fn active_freezes(&self) -> AdminStoreResult<BTreeMap<String, DateTime<Utc>>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn capacity_peaks(
+        &self,
+        _account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, u32>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn clear_rate_limit(
+        &self,
+        _account_id: &str,
+        _through_revision: Revision,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn extend_rate_limit(
+        &self,
+        _account_id: &str,
+        _through_revision: Revision,
+        _until: DateTime<Utc>,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
     }
 }
 

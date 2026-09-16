@@ -544,6 +544,7 @@ pub(super) struct FakeAccountStore {
     quota_window_usage: Mutex<Vec<AccountUsageWindowResult>>,
     quota_window_queries: Mutex<Vec<AccountUsageWindowQuery>>,
     quota_forecast_history: Mutex<QuotaForecastHistory>,
+    update_commands: Mutex<Vec<UpdateAccount>>,
 }
 
 impl FakeAccountStore {
@@ -551,7 +552,7 @@ impl FakeAccountStore {
         Self::with_account(account_record(kind), events)
     }
 
-    fn with_account(account: AccountRecord, events: EventLog) -> Arc<Self> {
+    pub(super) fn with_account(account: AccountRecord, events: EventLog) -> Arc<Self> {
         Arc::new(Self {
             events,
             accounts: Mutex::new(vec![account]),
@@ -562,7 +563,15 @@ impl FakeAccountStore {
             quota_window_usage: Mutex::new(Vec::new()),
             quota_window_queries: Mutex::new(Vec::new()),
             quota_forecast_history: Mutex::new(QuotaForecastHistory::default()),
+            update_commands: Mutex::new(Vec::new()),
         })
+    }
+
+    pub(super) fn update_commands(&self) -> Vec<UpdateAccount> {
+        self.update_commands
+            .lock()
+            .expect("update commands")
+            .clone()
     }
 
     pub(super) fn fail_next_commit(&self) {
@@ -852,6 +861,10 @@ impl AccountStore for FakeAccountStore {
         self.record("store.update_account");
         self.record_context(context);
         self.require_commit()?;
+        self.update_commands
+            .lock()
+            .expect("update commands")
+            .push(command.clone());
         Ok(AccountUpdateResult {
             config_revision: revision(2),
             account_id: ProviderAccountId::new(command.account_id).expect("account ID"),
@@ -944,6 +957,13 @@ impl SettingsStore for StaticSettingsStore {
             usage_retention_days: 30,
             ops_event_retention_days: 30,
             audit_retention_days: 30,
+            account_auto_freeze_enabled: true,
+            account_auto_freeze_threshold: 12,
+            account_auto_freeze_window_seconds: 600,
+            account_auto_freeze_duration_seconds: 7_200,
+            account_auto_freeze_probe_enabled: true,
+            account_auto_freeze_probe_model: None,
+            account_auto_freeze_adaptive_concurrency: true,
             updated_at: Utc::now(),
         })
     }

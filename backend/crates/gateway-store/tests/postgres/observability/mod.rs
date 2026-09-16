@@ -855,6 +855,29 @@ impl ProviderCooldownPort for StaticCooldowns {
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>> {
         Box::pin(async { Ok(false) })
     }
+
+    fn record_capacity_failure<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _window: Duration,
+        _in_flight: u32,
+    ) -> BoxFuture<'a, Result<u32, ProviderStoreError>> {
+        Box::pin(async { Ok(0) })
+    }
+
+    fn clear_capacity_failures<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capacity_peak_in_flight<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> BoxFuture<'a, Result<Option<u32>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 fn test_cooldown(account_id: &str, revision: u64) -> ProviderCooldown {

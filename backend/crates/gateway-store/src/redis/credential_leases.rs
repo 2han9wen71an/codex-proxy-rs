@@ -645,6 +645,36 @@ impl ProviderLeasePort for RedisProviderLeaseCoordinator {
             }
         })
     }
+
+    fn account_in_flight<'a>(
+        &'a self,
+        account_ids: &'a [ProviderAccountId],
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<std::collections::BTreeMap<ProviderAccountId, u32>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            if account_ids.is_empty() {
+                return Ok(std::collections::BTreeMap::new());
+            }
+            let ids = account_ids
+                .iter()
+                .map(|account_id| account_id.as_str().to_owned())
+                .collect::<Vec<_>>();
+            let signals = self
+                .repository
+                .credential_runtime_signals(&ids)
+                .await
+                .map_err(|_| provider_unavailable("load account in-flight signals"))?;
+            Ok(signals
+                .into_iter()
+                .filter_map(|signal| {
+                    let account_id = ProviderAccountId::new(signal.resource_id).ok()?;
+                    Some((account_id, signal.in_flight))
+                })
+                .collect())
+        })
+    }
 }
 
 fn provider_unavailable(operation: &'static str) -> ProviderStoreError {

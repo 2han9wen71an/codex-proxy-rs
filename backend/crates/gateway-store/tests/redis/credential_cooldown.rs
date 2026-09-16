@@ -3,7 +3,9 @@ use std::time::{Duration as StdDuration, SystemTime};
 use chrono::{DateTime, Duration, Utc};
 use gateway_core::{
     account::{CredentialRevision, ProviderAccountId},
-    provider_ports::{ProviderCooldownPort, ProviderCooldownScope, ProviderScopedCooldown},
+    provider_ports::{
+        ProviderCooldownKind, ProviderCooldownPort, ProviderCooldownScope, ProviderScopedCooldown,
+    },
 };
 use gateway_store::{
     Revision,
@@ -18,6 +20,7 @@ fn credential_cooldown_is_revision_fenced() {
         provider_account_id: "account-1".to_owned(),
         credential_revision: Revision::new(2).expect("positive revision"),
         cooldown_until: Utc::now() + Duration::seconds(30),
+        kind: ProviderCooldownKind::RateLimit,
     };
     assert_eq!(cooldown.credential_revision.get(), 2);
 }
@@ -159,6 +162,7 @@ async fn credential_cooldown_read_removes_expired_grace_key() {
         provider_account_id: "acct_cooldown_expiry".to_owned(),
         credential_revision: Revision::new(1).expect("positive revision"),
         cooldown_until: millisecond_precision(cooldown_until),
+        kind: ProviderCooldownKind::RateLimit,
     };
     repository
         .cache_credential_cooldown(&cooldown)
@@ -284,6 +288,7 @@ fn cooldown(account_id: &str, revision: u64, seconds: i64) -> CredentialCooldown
         provider_account_id: account_id.to_owned(),
         credential_revision: Revision::new(revision).expect("positive revision"),
         cooldown_until: millisecond_precision(Utc::now() + Duration::seconds(seconds)),
+        kind: ProviderCooldownKind::RateLimit,
     }
 }
 
