@@ -72,7 +72,7 @@ use crate::transport::diagnostics::{
     CodexFailureCategory, CodexUpstreamFailure, CodexUpstreamSendPhase,
 };
 use crate::transport::profile::{
-    APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexRequestLocation, CodexWireProfileState,
+    APPCAST_POLL_INTERVAL, CodexDesktopReleaseService, CodexWireProfileState,
 };
 use crate::transport::protocol::responses::{
     CodexResponsesRequest, PREVIOUS_RESPONSE_NOT_FOUND_CODE, PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
@@ -80,7 +80,8 @@ use crate::transport::protocol::responses::{
 };
 use crate::transport::protocol::websocket::WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 use crate::transport::request::{
-    CodexRequestEncodeError, RequestAccountScope, encode_generate_request, scope_request_to_account,
+    CodexRequestEncodeError, RequestAccountScope, align_structured_location_fields,
+    encode_generate_request, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
@@ -141,7 +142,6 @@ pub struct CodexProvider {
     quota: Arc<CodexCredentialQuotaService>,
     account_feedback: Arc<AccountFeedbackStats>,
     client: CodexBackendClient,
-    location: Option<CodexRequestLocation>,
     responses_url: Url,
     image_generations_url: Url,
     image_edits_url: Url,
@@ -174,7 +174,6 @@ impl CodexProvider {
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
         let search_url = Url::parse(&endpoint_url(&base_url, CODEX_ALPHA_SEARCH_PATH))
             .map_err(|_| CodexProviderConfigError::InvalidBaseUrl)?;
-        let location = profile.snapshot().location;
         let client =
             CodexBackendClient::new(http, base_url, profile).with_websocket_pool(websocket_pool);
         Ok(Self {
@@ -183,7 +182,6 @@ impl CodexProvider {
             quota,
             account_feedback,
             client,
-            location,
             responses_url,
             image_generations_url,
             image_edits_url,
@@ -256,8 +254,7 @@ impl Provider for CodexProvider {
                 ..Default::default()
             };
         };
-        let Ok(encoded) = encode_generate_request(request, "observability", self.location.as_ref())
-        else {
+        let Ok(encoded) = encode_generate_request(request, "observability", None) else {
             return ProviderRequestObservation::default();
         };
         let semantics = encoded.semantics();
@@ -358,9 +355,8 @@ impl Provider for CodexProvider {
         };
         let previous_session = decode_openai_session_state(generate);
         let continuation_requested = generate.native_continuation_requested();
-        let mut upstream_request =
-            encode_generate_request(generate, upstream_model.as_str(), self.location.as_ref())
-                .map_err(map_request_error)?;
+        let mut upstream_request = encode_generate_request(generate, upstream_model.as_str(), None)
+            .map_err(map_request_error)?;
         if let Some(conversation_id) = previous_session
             .as_ref()
             .and_then(|state| state.conversation_id.as_ref())
@@ -513,6 +509,18 @@ impl Provider for CodexProvider {
             lease.installation_id(),
             account_scope,
         );
+        // 每次执行从原始请求编码，选定出口后再覆盖，避免换号时携带上次位置。
+        if let Some(location) = lease
+            .account()
+            .request_location()
+            .or(context.request_location())
+        {
+            align_structured_location_fields(
+                upstream_request.body_mut(),
+                chrono::Utc::now(),
+                location,
+            );
+        }
         let requirement = transport_requirement(&upstream_request);
         let api_http = matches!(lease.authentication(), crate::credential::CodexRuntimeAuthentication::ApiKey(auth)
             if auth.configuration.transport == crate::credential::ApiKeyTransport::Http);

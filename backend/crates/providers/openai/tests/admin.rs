@@ -1400,7 +1400,6 @@ fn valid_config() -> TestOpenAiConfig {
         arch: "arm64".to_owned(),
         terminal: "xterm-256color".to_owned(),
         residency: None,
-        location: Default::default(),
         verified_at: Utc
             .with_ymd_and_hms(2026, 7, 19, 0, 0, 0)
             .single()

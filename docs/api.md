@@ -428,12 +428,12 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 | `GET` | `/api/admin/proxies` | `page`、`pageSize`（1-200）、`search`（名称） | `{ items, page }` |
 | `GET` | `/api/admin/proxies/accounts` | `proxyId`、`page`、`pageSize`（1-200）、`search`（账号名称或邮箱） | `{ items, page }` |
 | `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
-| `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl }` | `201 { record, configRevision }` |
-| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl? }` | `{ record, configRevision }` |
+| `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl, location? }` | `201 { record, configRevision }` |
+| `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl?, location? }` | `{ record, configRevision }` |
 | `POST` | `/api/admin/proxies/test` | `{ id, revision }` | 最新代理记录 / Proxy record with test result |
 | `POST` | `/api/admin/proxies/delete` | `{ id, revision }` | `{ configRevision }` |
 
-`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、
+`record` 包含 `id`、`name`、`endpoint`、`hasAuthentication`、`revision`、`accountCount`、`location`、
 `lastTestAt`、`lastTest: { success, latencyMs, exitIp, message }`、`createdAt`、`updatedAt`。
 未测试时 `lastTestAt` / `lastTest` 为 `null`。连通性失败返回 HTTP 200 和 `lastTest.success=false`；
 记录版本过期、重复 URL、删除已绑定的代理返回 409，并发测试满载返回 429。
@@ -448,6 +448,17 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 
 更新省略 `proxyUrl` 保留认证；连接配置改变时清除测试结果并更新所有绑定账号。
 测试结果只在请求中的版本仍匹配时保存。
+
+`location` 为 `null` 或完整对象 `{ country, region, city, timezone }`。国家代码为两位大写 ASCII 字母；
+地区、城市禁止控制字符，去除首尾空白后须为 1–128 个字符；时区必须是有效 IANA 名称，例如 `Asia/Tokyo`。
+创建时省略或 `null` 表示继承全局；更新时省略表示保留，`null` 清除覆盖，完整对象替换覆盖。
+只改位置不清空连通性测试结果，也不更改账号凭据版本。
+
+关联账号的 OpenAI/Codex Responses 请求（HTTP/SSE、WebSocket）优先使用代理位置，否则使用全局
+运行设置中已开启的 `requestLocation`；两者均未开启时保留客户端原有位置和时区。全局覆盖按请求冻结，
+新请求使用保存后的设置，无需重启；代理覆盖在每次执行时读取，
+换号或换出口按该次选定账号解析。位置只影响带来源标记的环境上下文日期/时区和 Web Search 的结构化位置，
+不改变用户普通文本、epoch 时间戳、真实出口 IP、服务或管理端时区、数据驻留约束及 xAI 请求。
 
 测试固定经代理访问双栈端点 `https://api64.ipify.org?format=json`，返回本次连接实际使用的 IPv4 或 IPv6 出口地址，
 不分别验证两种地址族的连通性。超时 15 秒，每进程最多同时测试 4 条。
@@ -904,6 +915,8 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 设置更新字段包括：
 
 ```text
+requestLocationEnabled
+requestLocation
 modelMappings
 refreshMarginSeconds
 refreshConcurrency
@@ -926,6 +939,14 @@ accountAutoFreezeProbeEnabled
 accountAutoFreezeProbeModel
 accountAutoFreezeAdaptiveConcurrency
 ```
+
+`requestLocationEnabled` 是必填布尔值，默认 `false`：关闭时不覆盖客户端原有位置和时区；开启时使用已保存的
+`requestLocation`。关闭不会清空自定义值，代理自定义位置仍优先。
+`requestLocation` 是必填的完整对象 `{ country, region, city, timezone }`，不接受 `null`；初始保存值为
+`{ country: "US", region: "Ohio", city: "Piketon", timezone: "America/New_York" }`。
+字段约束与[代理位置](#独立代理管理--managed-proxies)一致。全局自定义开启后，OpenAI Responses 使用全局位置，
+关联代理配置了自定义位置时优先使用代理值。保存后通过现有配置发布机制对新请求生效，
+已开始请求及其重试保持同一份全局值；普通文本、绝对时间戳和数据驻留要求不受影响。
 
 `maxWaitingPerKey` 与 `maxWaitingPerAccount` 是全局统一的排队容量，取值 0～1,000，默认 0（关闭）；
 每个 Key、每个账号各自独立计数，没有单对象覆盖字段。执行并发为 5、最大排队数为 5 时，

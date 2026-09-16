@@ -744,6 +744,7 @@ pub struct ProviderAccount {
     next_refresh_at: Option<SystemTime>,
     has_refresh_token: bool,
     outbound_proxy: Option<super::OutboundProxy>,
+    request_location: Option<super::RequestLocation>,
 }
 
 impl ProviderAccount {
@@ -780,6 +781,7 @@ impl ProviderAccount {
             next_refresh_at: None,
             has_refresh_token: false,
             outbound_proxy: None,
+            request_location: None,
         }
     }
 
@@ -809,6 +811,8 @@ impl ProviderAccount {
 
     #[must_use]
     pub fn with_outbound_proxy(mut self, proxy: Option<super::OutboundProxy>) -> Self {
+        // 出口变化后不能沿用旧出口的位置；存储投影应在绑定出口后设置位置。
+        self.request_location = None;
         self.outbound_proxy = proxy;
         self
     }
@@ -816,6 +820,17 @@ impl ProviderAccount {
     #[must_use]
     pub const fn outbound_proxy(&self) -> Option<&super::OutboundProxy> {
         self.outbound_proxy.as_ref()
+    }
+
+    #[must_use]
+    pub fn with_request_location(mut self, location: Option<super::RequestLocation>) -> Self {
+        self.request_location = self.outbound_proxy.as_ref().and(location);
+        self
+    }
+
+    #[must_use]
+    pub const fn request_location(&self) -> Option<&super::RequestLocation> {
+        self.request_location.as_ref()
     }
 
     #[must_use]
