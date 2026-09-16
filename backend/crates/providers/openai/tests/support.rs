@@ -209,12 +209,13 @@ impl ProviderAccountStore for MemoryAccountStore {
         if self.fail_provider_listing.load(Ordering::SeqCst) {
             return Err(store_error(StoreErrorKind::Unavailable));
         }
+        // 与 Postgres 实现的调度列表语义一致：停用账号不进入常规候选。
         Ok(self
             .accounts
             .lock()
             .expect("account store lock")
             .values()
-            .filter(|stored| stored.account.provider() == provider)
+            .filter(|stored| stored.account.provider() == provider && stored.account.enabled())
             .map(|stored| stored.account.clone())
             .collect())
     }

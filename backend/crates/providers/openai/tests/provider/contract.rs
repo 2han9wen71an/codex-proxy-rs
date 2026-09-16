@@ -7613,6 +7613,94 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
 }
 
 #[tokio::test]
+async fn disabled_api_key_diagnostic_preserves_authentication_and_transport_constraints() {
+    let upstream = MockServer::start().await;
+    let oauth = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_provider_contract";
+    store
+        .seed_api_key(
+            account_id,
+            upstream.uri(),
+            provider_openai::credential::ApiKeyTransport::Http,
+        )
+        .await;
+    let account = store.account(account_id).expect("API account");
+    store
+        .set_enabled(account.id(), false)
+        .await
+        .expect("disable API account");
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(header("authorization", "Bearer sk-api-test-only"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                format!(
+                    "event: response.created\ndata: {{\"type\":\"response.created\",\"response\":{{\"id\":\"resp_scope_capture\",\"model\":\"gpt-5.4\"}}}}\n\n{CAPTURE_COMPLETED_SSE}"
+                ),
+                "text/event-stream",
+            ),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let provider = provider_with_base_url(&store, oauth.uri());
+    let mut stream = provider
+        .execute(
+            planned_request("openai", generate_operation()),
+            diagnostic_context("req_disabled_api_http", account_id),
+        )
+        .await
+        .expect("disabled API account diagnostic");
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        completed |= event
+            .expect("API response")
+            .canonical_facts()
+            .iter()
+            .any(|event| matches!(event, GatewayEvent::Completed(_)));
+    }
+    assert!(completed);
+
+    let warmup = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            json!({"model":"gpt-5.4","input":[],"store":false,"generate":false})
+                .as_object()
+                .expect("warmup object")
+                .clone(),
+        )
+        .expect("warmup payload"),
+    ));
+    let search = Operation::Search(StandaloneSearchRequest::from_raw_json(
+        RawJsonPayload::new(
+            "openai",
+            Bytes::from_static(br#"{"id":"disabled-api-search","commands":{}}"#),
+        )
+        .expect("search payload"),
+    ));
+    for request in [
+        planned_request("openai", warmup),
+        planned_provider_endpoint_request("openai", search),
+    ] {
+        let result = provider
+            .execute(
+                request,
+                diagnostic_context("req_disabled_api_restricted", account_id),
+            )
+            .await;
+        let Err(error) = result else {
+            panic!("diagnostic must preserve authentication and transport restrictions")
+        };
+        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    }
+    assert!(oauth.received_requests().await.unwrap().is_empty());
+    assert_eq!(upstream.received_requests().await.unwrap().len(), 1);
+    assert!(!store.account(account_id).expect("API account").enabled());
+}
+
+#[tokio::test]
 async fn api_key_http_account_is_rejected_before_websocket_warmup_or_old_revision_continuation() {
     let upstream = MockServer::start().await;
     let store = Arc::new(MemoryAccountStore::default());
