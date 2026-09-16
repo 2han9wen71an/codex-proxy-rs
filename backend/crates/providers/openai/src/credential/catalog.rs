@@ -438,19 +438,6 @@ impl CodexCredentialCatalogService {
             .map(|models| models.map(<[String]>::to_vec))
     }
 
-    pub fn observed_model_support(
-        &self,
-        account: &ProviderAccount,
-        model: &str,
-    ) -> Result<Option<bool>, CodexCredentialCatalogError> {
-        let Some(snapshot) = self.cached()? else {
-            return Ok(None);
-        };
-        Ok(Some(snapshot.account_models(account)?.is_some_and(
-            |models| models.iter().any(|candidate| candidate == model),
-        )))
-    }
-
     /// 优先读取套餐目录 cache；缺失时才用当前账号所属套餐的有限候选集实时填充。
     pub async fn cached_or_refresh_account_catalog(
         &self,

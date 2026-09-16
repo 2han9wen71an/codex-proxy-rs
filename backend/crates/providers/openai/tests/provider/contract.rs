@@ -332,7 +332,6 @@ fn provider_and_quota_with_runtime_ports(
         leases,
         session_affinity,
         Arc::new(MemorySessionExclusions::default()),
-        Arc::clone(&catalog),
         Arc::clone(&quota),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().expect("cookie policy"),
@@ -7846,6 +7845,163 @@ async fn connection_limit_payload_survives_exhausted_retry_budget() {
     );
 }
 
+#[tokio::test]
+async fn api_key_native_endpoints_preserve_bodies_headers_and_own_base_url() {
+    for prefix in ["", "/v1", "/custom/v2"] {
+        let upstream = MockServer::start().await;
+        let oauth = MockServer::start().await;
+        let store = Arc::new(MemoryAccountStore::default());
+        store
+            .seed_api_key(
+                "acct_provider_contract",
+                format!("{}{prefix}", upstream.uri()),
+                provider_openai::credential::ApiKeyTransport::Http,
+            )
+            .await;
+        let provider = provider_with_base_url(&store, oauth.uri());
+        let body = br#"{ "model":"unlisted-model", "future":9007199254740993, "prompt":"first", "prompt":"last" }"#;
+        let response = br#"{ "output":"opaque", "future":9007199254740993, "usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7} }"#;
+        for (index, endpoint) in ["/images/generations", "/images/edits", "/alpha/search"]
+            .into_iter()
+            .enumerate()
+        {
+            Mock::given(method("POST"))
+                .and(path(format!("{prefix}{endpoint}")))
+                .and(header("authorization", "Bearer sk-api-test-only"))
+                .and(body_bytes(body.to_vec()))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("x-upstream-feature", "opaque")
+                        .set_body_raw(response.to_vec(), "application/json"),
+                )
+                .expect(1)
+                .mount(&upstream)
+                .await;
+            let payload = RawJsonPayload::new("openai", Bytes::copy_from_slice(body)).unwrap();
+            let operation = match index {
+                0 => Operation::GenerateImage(ImageRequest::from_raw_json(
+                    ImageRequestKind::Generation,
+                    payload,
+                )),
+                1 => Operation::GenerateImage(ImageRequest::from_raw_json(
+                    ImageRequestKind::Edit,
+                    payload,
+                )),
+                _ => Operation::Search(StandaloneSearchRequest::from_raw_json(payload)),
+            };
+            let mut stream = provider
+                .execute(
+                    planned_provider_endpoint_request("openai", operation),
+                    context(
+                        &format!("req_api_endpoint_{index}"),
+                        CancellationToken::new(),
+                    ),
+                )
+                .await
+                .expect("API account eligible without a model catalog");
+            let mut raw = None;
+            let mut header_preserved = false;
+            let mut usage = false;
+            while let Some(event) = stream.next().await {
+                let event = event.expect("raw endpoint response");
+                if let Some(body) = event.wire_event().and_then(|wire| wire.raw_json_body()) {
+                    raw = Some(body.clone());
+                }
+                if let Some(observation) = event.response_observation() {
+                    header_preserved |= observation.client_headers().iter().any(|header| {
+                        header.name() == "x-upstream-feature"
+                            && header.value().as_ref() == b"opaque"
+                    });
+                }
+                usage |= event
+                    .canonical_facts()
+                    .iter()
+                    .any(|fact| matches!(fact, GatewayEvent::Usage(_)));
+            }
+            assert_eq!(raw.as_deref(), Some(response.as_slice()));
+            assert!(header_preserved);
+            if index < 2 {
+                assert!(usage, "image usage uses the shared accounting path");
+            }
+        }
+        assert!(oauth.received_requests().await.unwrap().is_empty());
+        for request in upstream.received_requests().await.unwrap() {
+            for name in ["cookie", "chatgpt-account-id"] {
+                assert!(!request.headers.contains_key(name));
+            }
+            assert_eq!(request.headers["originator"], "codex_cli_rs");
+            assert_eq!(request.headers["version"], "0.144.0");
+            assert_eq!(
+                request.headers["user-agent"],
+                wire_profile().snapshot().user_agent()
+            );
+        }
+        upstream.verify().await;
+    }
+}
+
+#[tokio::test]
+async fn api_key_responses_forward_lite_memgen_and_native_compaction_without_catalog_gates() {
+    let upstream = MockServer::start().await;
+    let store = Arc::new(MemoryAccountStore::default());
+    store
+        .seed_api_key(
+            "acct_provider_contract",
+            upstream.uri(),
+            provider_openai::credential::ApiKeyTransport::Http,
+        )
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":"different-model"}]})),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(header("x-openai-internal-codex-responses-lite", "true"))
+        .and(header("x-openai-memgen-request", "true"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(CAPTURE_COMPLETED_SSE, "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let provider = provider(&store);
+    provider.query_model_capabilities().await.unwrap();
+    let body = json!({"model":"gpt-5.4","input":[{"type":"compaction_trigger"}],"reasoning":{"effort":"future-effort"},"tools":[{"type":"future-tool"}],"future_option":{"nested":true}});
+    let operation = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", body.as_object().unwrap().clone())
+            .unwrap()
+            .with_context(Map::from_iter([
+                ("responses_lite".to_owned(), json!("true")),
+                ("memgen_request".to_owned(), json!("true")),
+            ])),
+    ));
+    let mut stream = provider
+        .execute(
+            planned_request("openai", operation),
+            context("req_api_native_features", CancellationToken::new()),
+        )
+        .await
+        .expect("upstream judges capabilities");
+    while let Some(event) = stream.next().await {
+        event.expect("response");
+    }
+    let requests = upstream.received_requests().await.unwrap();
+    let request = requests
+        .iter()
+        .find(|request| request.method == "POST")
+        .unwrap();
+    let captured: Value = serde_json::from_slice(&request.body).unwrap();
+    for field in ["input", "reasoning", "tools", "future_option"] {
+        assert_eq!(captured[field], body[field]);
+    }
+    upstream.verify().await;
+}
+
 const API_KEY_DOWNSTREAM_HEADERS: &[&str] = &[
     "cf-future-proxy-field",
     "x-forwarded-for",
@@ -7857,21 +8013,29 @@ const API_KEY_DOWNSTREAM_HEADERS: &[&str] = &[
     "x-grok-turn-idx",
     "x-xai-future-field",
     "session_id",
-    "session-id",
-    "thread-id",
-    "x-codex-future",
-    "x-openai-internal-future",
+    "x-openai-actor-authorization",
     "authorization",
     "cookie",
     "chatgpt-account-id",
 ];
 
+const API_KEY_BUSINESS_HEADERS: &[&str] = &[
+    "session-id",
+    "thread-id",
+    "x-codex-future",
+    "x-openai-internal-future",
+];
+
 fn generate_with_downstream_headers() -> Operation {
     let mut headers: Vec<_> = API_KEY_DOWNSTREAM_HEADERS
         .iter()
+        .chain(API_KEY_BUSINESS_HEADERS)
         .map(|name| json!([name, STANDARD.encode(b"downstream-value")]))
         .collect();
     headers.push(json!(["x-business-extension", STANDARD.encode(b"keep")]));
+    for name in ["user-agent", "originator", "version"] {
+        headers.push(json!([name, STANDARD.encode(b"downstream-profile")]));
+    }
     Operation::Generate(GenerateRequest::from_protocol_payload(
         ProtocolPayload::json_object(
             "openai",
@@ -7965,15 +8129,28 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             assert!(!request.headers.contains_key(*name), "leaked {name}");
         }
         assert_eq!(request.headers["x-business-extension"], "keep");
-        for header in [
-            "cookie",
-            "chatgpt-account-id",
-            "originator",
-            "version",
-            "x-codex-routing-hint",
-        ] {
+        for name in API_KEY_BUSINESS_HEADERS {
+            assert_eq!(request.headers[*name], "downstream-value", "lost {name}");
+        }
+        for header in ["cookie", "chatgpt-account-id"] {
             assert!(!request.headers.contains_key(header), "unexpected {header}");
         }
+        assert_eq!(request.headers["originator"], "codex_cli_rs");
+        assert_eq!(request.headers["version"], "0.144.0");
+        assert_eq!(
+            request.headers["user-agent"],
+            wire_profile().snapshot().user_agent()
+        );
+        let model_request = requests
+            .iter()
+            .find(|request| request.method == "GET")
+            .unwrap();
+        assert_eq!(
+            model_request.headers["user-agent"],
+            wire_profile().snapshot().user_agent()
+        );
+        assert_eq!(model_request.headers["originator"], "codex_cli_rs");
+        assert_eq!(model_request.headers["version"], "0.144.0");
         let body: Value = serde_json::from_slice(&request.body).expect("ordinary JSON");
         assert_eq!(body["stream"], true);
         assert_eq!(body["model"], "gpt-5.4");
@@ -8047,24 +8224,36 @@ async fn disabled_api_key_diagnostic_preserves_authentication_and_transport_cons
         )
         .expect("search payload"),
     ));
-    for request in [
-        planned_request("openai", warmup),
-        planned_provider_endpoint_request("openai", search),
-    ] {
-        let result = provider
-            .execute(
-                request,
-                diagnostic_context("req_disabled_api_restricted", account_id),
-            )
-            .await;
-        let Err(error) = result else {
-            panic!("diagnostic must preserve authentication and transport restrictions")
-        };
-        assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
-        assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    let result = provider
+        .execute(
+            planned_request("openai", warmup),
+            diagnostic_context("req_disabled_api_restricted", account_id),
+        )
+        .await;
+    let Err(error) = result else {
+        panic!("diagnostic must preserve authentication and transport restrictions")
+    };
+    assert_eq!(error.kind(), ProviderErrorKind::NoEligibleAccount);
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    Mock::given(method("POST"))
+        .and(path("/alpha/search"))
+        .and(header("authorization", "Bearer sk-api-test-only"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"output":"ok"})))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let mut stream = provider
+        .execute(
+            planned_provider_endpoint_request("openai", search),
+            diagnostic_context("req_disabled_api_search", account_id),
+        )
+        .await
+        .expect("Search uses the same diagnostic account");
+    while let Some(event) = stream.next().await {
+        event.expect("Search response");
     }
     assert!(oauth.received_requests().await.unwrap().is_empty());
-    assert_eq!(upstream.received_requests().await.unwrap().len(), 1);
+    assert_eq!(upstream.received_requests().await.unwrap().len(), 2);
     assert!(!store.account(account_id).expect("API account").enabled());
 }
 
@@ -8138,7 +8327,12 @@ async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
                 );
                 assert!(!request.headers().contains_key("chatgpt-account-id"));
                 assert!(!request.headers().contains_key("cookie"));
-                assert!(!request.headers().contains_key("originator"));
+                assert_eq!(request.headers()["originator"], "codex_cli_rs");
+                assert_eq!(request.headers()["version"], "0.144.0");
+                assert_eq!(
+                    request.headers()["user-agent"],
+                    wire_profile().snapshot().user_agent()
+                );
                 for name in API_KEY_DOWNSTREAM_HEADERS
                     .iter()
                     .filter(|name| **name != "authorization")
@@ -8146,6 +8340,9 @@ async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
                     assert!(!request.headers().contains_key(*name), "leaked {name}");
                 }
                 assert_eq!(request.headers()["x-business-extension"], "keep");
+                for name in API_KEY_BUSINESS_HEADERS {
+                    assert_eq!(request.headers()[*name], "downstream-value", "lost {name}");
+                }
             })
             .await;
         let frame = websocket.next().await.unwrap().unwrap();

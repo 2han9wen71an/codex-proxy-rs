@@ -654,16 +654,8 @@ async fn free_and_k12_catalog_entitlements_are_isolated_by_plan_scope() {
         Some(vec!["gpt-5.4".to_owned()])
     );
     assert_eq!(
-        service
-            .observed_model_support(&first_free, "gpt-5.6-sol")
-            .expect("free support fact"),
-        Some(false)
-    );
-    assert_eq!(
-        service
-            .observed_model_support(&k12, "gpt-5.6-sol")
-            .expect("K12 support fact"),
-        Some(true)
+        service.cached_account_models(&k12).expect("K12 catalog"),
+        Some(vec!["gpt-5.4".to_owned(), "gpt-5.6-sol".to_owned()])
     );
     let synchronized_generation = service.catalog_generation().get();
     service.invalidate().expect("invalidate mixed-plan catalog");
@@ -679,8 +671,8 @@ async fn free_and_k12_catalog_entitlements_are_isolated_by_plan_scope() {
     );
     assert_eq!(
         service
-            .observed_model_support(&k12, "gpt-5.6-sol")
-            .expect("support fact after invalidation"),
+            .cached_account_models(&k12)
+            .expect("catalog after invalidation"),
         None
     );
     server.verify().await;

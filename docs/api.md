@@ -166,8 +166,10 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 `cdn-loop`）以及 `Accept-Encoding` / `Content-Encoding`。链路元数据和编解码能力
 由各段传输层独立管理；其余业务扩展头继续透传，不使用固定业务头白名单。
 此规则同时适用于上游 HTTP 和 WebSocket，不影响上游响应的 `cf-ray` 等诊断信息。
-API Key 上游还会移除 Cookie、ChatGPT 账号身份、`x-codex-*`、`x-openai-internal-*`、会话/线程身份头及
-`X-OpenAI-Actor-Authorization`，避免把 OAuth 或网关托管身份传给第三方 API。
+API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`version`）和业务头透传规则，
+包括会话、线程、Lite 和其他业务扩展头。
+上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
+`X-OpenAI-Actor-Authorization` 托管认证声明。
 
 Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和 `sec-fetch-*`
 携带的下游 SDK/浏览器环境或页面来源。过滤规则适用于所有下游客户端，与 User-Agent 无关；
@@ -547,18 +549,21 @@ API Key 账号使用以下独立凭据形态：
 }
 ```
 
-`base_url` 是 API 前缀，追加 `responses` 和 `models`，不会自动补 `/v1`；支持根路径和自定义前缀。
+`base_url` 是 API 前缀，追加 `responses`、`models`、`images/generations`、`images/edits` 或 `alpha/search`，
+不会自动补 `/v1`；支持根路径和自定义前缀。
 地址仅允许 HTTPS，HTTP 只允许本机回环；拒绝 URL 中的认证信息、查询串和 fragment。
 `transport` 可省略（默认 `http`）或设为 `prefer_websocket`。API Key 使用 Bearer 认证与普通 JSON，
-不携带 OAuth Cookie 或 ChatGPT 身份。上游须提供标准 `/models` 列表，模型目录按账号和凭据版本隔离。
+不携带 OAuth Cookie 或 ChatGPT 身份。上游模型列表使用标准 `/models` 格式，按账号和凭据版本隔离；
+目录用于模型发现，不作为能力白名单，未列出的模型仍交由上游判断。
 API Key 每次导入创建独立账号；更新已有账号使用 `rotate`。导出会显式包含密钥，沿用敏感导出的确认合同。
 
 sub2api 的 `platform=openai`、`type=apikey` 使用 `credentials.base_url` / `credentials.api_key`；
 导入时按其端点规则将服务根、版本前缀或完整 `/responses` 地址转换为 API 前缀，缺省地址为官方 `/v1`。
 非空模型映射、请求头覆盖、其他协议和启用的 `extra.openai_*` 设置尚未适配，返回输入错误，需先移除并在本项目重新配置。
 
-API Key 账号支持 Responses、模型目录、连接测试和使用统计中的本地用量。OAuth 刷新/重新授权、ChatGPT 额度、个人资料、订阅、重置卡
-及 Images、standalone Search、Responses Lite / compact 专用入口不对这类账号开放。
+API Key 账号与 OAuth 共用现有 Responses、Images 和 standalone Search 请求与响应链路，
+包括 Responses Lite 和原生压缩协议的透传，实际支持情况由上游决定；不提供独立 compact 路由。
+模型目录、连接测试和本地用量统计可用；OAuth 刷新/重新授权、ChatGPT 额度、个人资料、订阅和重置卡不适用。
 客户端的 `image_generation` 和 `X-OpenAI-Actor-Authorization` 声明不改变账号的实际能力。
 账号列表和详情的 API Key `usage` 汇总该账号创建后仍保留的本地请求记录，`windowLabelDisplay` 为 `通用额度`；
 日志清理会影响累计范围，不代表上游余额。OAuth 账号仍按实际周/月额度窗口统计。

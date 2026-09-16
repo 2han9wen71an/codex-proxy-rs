@@ -279,6 +279,10 @@ impl Provider for CodexProvider {
         }
     }
 
+    fn model_catalog_is_exhaustive(&self) -> bool {
+        false
+    }
+
     async fn query_model_capabilities(
         &self,
     ) -> Result<Vec<ProviderModelCapabilities>, ProviderError> {
@@ -403,8 +407,6 @@ impl Provider for CodexProvider {
                 cyber_policy_session_key.as_ref(),
                 session_affinity.as_ref(),
                 requires_websocket,
-                upstream_request.responses_lite.is_some()
-                    || upstream_request.memgen_request.is_some(),
             )
             .await
             .map_err(map_selection_error)?;

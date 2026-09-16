@@ -24,7 +24,6 @@ use thiserror::Error;
 use url::Url;
 
 use super::affinity::{CODEX_ROOT_SESSION_TTL, CodexSessionAffinity};
-use super::catalog::CodexCredentialCatalogService;
 use super::cookie::CodexCookiePolicy;
 use super::quota::CodexCredentialQuotaService;
 use super::refresh::refresh_recovery_deadline;
@@ -102,7 +101,6 @@ pub(crate) struct SelectCodexProviderEndpointCredential<'a> {
 
 struct CredentialSelectionInput<'a> {
     requires_websocket: bool,
-    oauth_only: bool,
     request_url: &'a Url,
     attempt: &'a AttemptContext,
     session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
@@ -122,7 +120,6 @@ pub struct CodexCredentialSelector {
     leases: Arc<dyn ProviderLeasePort>,
     session_affinity: Arc<dyn ProviderSessionAffinityPort>,
     session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
-    catalog: Arc<CodexCredentialCatalogService>,
     quota: Arc<CodexCredentialQuotaService>,
     cookie_policy: CodexCookiePolicy,
     risk_recovery: Mutex<HashMap<String, RiskRecoveryState>>,
@@ -258,12 +255,6 @@ struct AffinityTelemetry {
     account_switch: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelCatalogEligibility<'a> {
-    Required(&'a str),
-    NotApplicable,
-}
-
 impl CodexCredentialSelector {
     #[must_use]
     // 选择器显式持有各能力边界，避免把 Provider 私有服务重新包装成通用容器。
@@ -274,7 +265,6 @@ impl CodexCredentialSelector {
         leases: Arc<dyn ProviderLeasePort>,
         session_affinity: Arc<dyn ProviderSessionAffinityPort>,
         session_exclusions: Arc<dyn ProviderSessionExclusionPort>,
-        catalog: Arc<CodexCredentialCatalogService>,
         quota: Arc<CodexCredentialQuotaService>,
         account_feedback: Arc<AccountFeedbackStats>,
         cookie_policy: CodexCookiePolicy,
@@ -285,7 +275,6 @@ impl CodexCredentialSelector {
             leases,
             session_affinity,
             session_exclusions,
-            catalog,
             quota,
             cookie_policy,
             risk_recovery: Mutex::new(HashMap::new()),
@@ -300,18 +289,13 @@ impl CodexCredentialSelector {
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket: false,
-            oauth_only: false,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
             session_affinity_observation: None,
         };
-        self.select_inner(
-            &input,
-            None,
-            ModelCatalogEligibility::Required(request.upstream_model),
-        )
-        .await
+        self.select_inner(&input, None, Some(request.upstream_model))
+            .await
     }
 
     pub(crate) async fn select_with_cyber_policy(
@@ -320,11 +304,9 @@ impl CodexCredentialSelector {
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
         session_affinity_observation: Option<&CodexSessionAffinity>,
         requires_websocket: bool,
-        oauth_only: bool,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket,
-            oauth_only,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity_key,
@@ -333,7 +315,7 @@ impl CodexCredentialSelector {
         self.select_inner(
             &input,
             cyber_policy_session_key,
-            ModelCatalogEligibility::Required(request.upstream_model),
+            Some(request.upstream_model),
         )
         .await
     }
@@ -341,28 +323,26 @@ impl CodexCredentialSelector {
     /// 为不属于 Responses 文本模型目录的 Provider 原生端点选择账号。
     ///
     /// 账号范围、健康度、配额、并发租约、cookie 与认证准备仍走同一套选择链路；
-    /// 唯一差异是不能用文本模型目录成员关系淘汰账号。
+    /// 原生端点没有 Responses 模型，不套用管理员配置的文本模型权限。
     pub(crate) async fn select_for_provider_endpoint(
         &self,
         request: &SelectCodexProviderEndpointCredential<'_>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let input = CredentialSelectionInput {
             requires_websocket: false,
-            oauth_only: true,
             request_url: request.request_url,
             attempt: request.attempt,
             session_affinity_key: request.session_affinity.map(CodexSessionAffinity::key),
             session_affinity_observation: request.session_affinity,
         };
-        self.select_inner(&input, None, ModelCatalogEligibility::NotApplicable)
-            .await
+        self.select_inner(&input, None, None).await
     }
 
     async fn select_inner(
         &self,
         request: &CredentialSelectionInput<'_>,
         cyber_policy_session_key: Option<&ProviderSessionAffinityKey>,
-        model_catalog_eligibility: ModelCatalogEligibility<'_>,
+        upstream_model: Option<&str>,
     ) -> Result<CodexCredentialLease, CredentialSelectionError> {
         let queue_policy = request.attempt.account_selection_policy().queue_policy();
         let mut waiting = CapacityWait::new(
@@ -393,35 +373,22 @@ impl CodexCredentialSelector {
                 .into_iter()
                 .filter(|account| {
                     account.provider() == &self.provider_kind
-                        && (!request.oauth_only
-                            || account.authentication_kind() == CODEX_AUTHENTICATION_KIND_OAUTH)
                         && (diagnostic
                             || request
                                 .attempt
                                 .account_scope()
                                 .is_some_and(|scope| scope.allows(account.id())))
                         && (diagnostic
-                            || match model_catalog_eligibility {
-                                ModelCatalogEligibility::NotApplicable => true,
-                                ModelCatalogEligibility::Required(upstream_model) => {
-                                    if !request.attempt.account_scope().is_some_and(|scope| {
+                            || upstream_model.is_none_or(|upstream_model| {
+                                let allowed =
+                                    request.attempt.account_scope().is_some_and(|scope| {
                                         scope.allows_model(account.id(), upstream_model)
-                                    }) {
-                                        model_access_rejected += 1;
-                                        return false;
-                                    }
-                                    let observed_support = self
-                                        .catalog
-                                        .observed_model_support(account, upstream_model);
-                                    if account.authentication_kind()
-                                        == super::CODEX_AUTHENTICATION_KIND_API_KEY
-                                    {
-                                        matches!(observed_support, Ok(Some(true)))
-                                    } else {
-                                        matches!(observed_support, Ok(None | Some(true)))
-                                    }
+                                    });
+                                if !allowed {
+                                    model_access_rejected += 1;
                                 }
-                            })
+                                allowed
+                            }))
                 })
                 .collect::<Vec<_>>();
             let mut eligible = Vec::with_capacity(accounts.len());
@@ -1379,7 +1346,6 @@ impl fmt::Debug for CodexCredentialSelector {
             .debug_struct("CodexCredentialSelector")
             .field("repository", &"ProviderAccountStore")
             .field("leases", &"ProviderLeasePort")
-            .field("catalog", &"CodexCredentialCatalogService")
             .field("quota", &"CodexCredentialQuotaService")
             .field("cookie_policy", &self.cookie_policy)
             .finish()

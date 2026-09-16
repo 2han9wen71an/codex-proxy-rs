@@ -127,7 +127,6 @@ pub async fn initialize(
         Arc::clone(&leases),
         session_affinity,
         session_exclusions,
-        Arc::clone(&catalog),
         Arc::clone(&quota),
         Arc::clone(&account_feedback),
         CodexCookiePolicy::official().map_err(|_| OpenAiInitializeError::CookiePolicy)?,

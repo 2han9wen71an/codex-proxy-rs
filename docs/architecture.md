@@ -195,6 +195,8 @@ OpenAI 的 OAuth 与 API Key 共用现有账号和事务。API Key 的 Base URL�
 通过通用画像输出客户端目录，OAuth 原生对象保留。通用账号层按 Provider 提交的 credential state 调度，不以是否存在
 上游用户 ID 推断可用性；OAuth 未完成身份投影时由 Provider 保持 `unknown`。状态恢复和未补齐身份的凭据轮换保留 `unknown`。
 API Key 默认 HTTP/SSE，可选 WS 优先；选号先验证传输资格，WS pool 与 continuation 按凭据版本隔离。
+OAuth 与 API Key 共用业务请求、响应和能力透传链路，差异限定在上游地址、认证与传输配置。
+OpenAI 模型目录用于发现，不因目录缺项拒绝请求；管理员配置的模型权限仍由 Core 与选号链路执行。
 
 - OpenAI 是透明边界。Responses 请求保留未知字段和字段顺序；SSE、WebSocket、Images 与 standalone
   Search 的业务正文按原始字节转发。canonical facts 从同一数据旁路提取，只用于路由、观测和计费。

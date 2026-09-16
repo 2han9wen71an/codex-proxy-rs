@@ -105,14 +105,13 @@ impl CodexBackendClient {
         profile: &CodexWireProfile,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
-        if self.protocol == OpenAiUpstreamProtocol::ResponsesApi {
-            let mut headers = HeaderMap::new();
-            headers.insert(AUTHORIZATION, HeaderValue::from_str(context.authorization)?);
-            return Ok(headers);
-        }
-        let mut headers =
-            build_codex_model_headers(profile, context.authorization, context.account_id)?;
-        insert_optional_header(&mut headers, "cookie", context.cookie_header)?;
+        // 客户端画像与认证方式无关；API Key 不携带 OAuth 账号身份和 Cookie。
+        let (account_id, cookie_header) = match self.protocol {
+            OpenAiUpstreamProtocol::Codex => (context.account_id, context.cookie_header),
+            OpenAiUpstreamProtocol::ResponsesApi => (None, None),
+        };
+        let mut headers = build_codex_model_headers(profile, context.authorization, account_id)?;
+        insert_optional_header(&mut headers, "cookie", cookie_header)?;
         Ok(headers)
     }
 
@@ -137,13 +136,11 @@ impl CodexBackendClient {
         let mut headers = self.response_headers(request, context)?;
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        if self.protocol == OpenAiUpstreamProtocol::Codex {
-            insert_optional_protocol_header(
-                &mut headers,
-                X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
-                request.responses_lite.as_deref(),
-            );
-        }
+        insert_optional_protocol_header(
+            &mut headers,
+            X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
+            request.responses_lite.as_deref(),
+        );
         Ok(headers)
     }
 
@@ -167,15 +164,6 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<HeaderMap> {
         let mut headers = self.model_request_headers(&self.profile.snapshot(), context)?;
-        if self.protocol == OpenAiUpstreamProtocol::ResponsesApi {
-            // 上游身份只来自该账号；客户端的 OAuth 画像与 Cookie 不跨域转发。
-            headers.insert(
-                HeaderName::from_static("x-client-request-id"),
-                HeaderValue::from_str(context.request_id)?,
-            );
-            append_passthrough_headers(&mut headers, request, self.protocol);
-            return Ok(headers);
-        }
         headers.insert(
             HeaderName::from_static("x-client-request-id"),
             HeaderValue::from_str(context.request_id)?,
@@ -215,46 +203,34 @@ impl CodexBackendClient {
             None => format!("model={}", request.model()),
         };
         insert_optional_protocol_header(&mut headers, "x-codex-routing-hint", Some(&routing_hint));
-        append_passthrough_headers(&mut headers, request, self.protocol);
+        append_passthrough_headers(&mut headers, request);
         Ok(headers)
     }
 }
 
-fn append_passthrough_headers(
-    headers: &mut HeaderMap,
-    request: &CodexResponsesRequest,
-    protocol: OpenAiUpstreamProtocol,
-) {
+fn append_passthrough_headers(headers: &mut HeaderMap, request: &CodexResponsesRequest) {
     for name in request.passthrough_headers.keys() {
         // 身份与传输字段只由画像/正文生成；其余协议头保留原始多值字节。
-        if (protocol == OpenAiUpstreamProtocol::ResponsesApi
-            && (name.as_str().starts_with("x-codex-")
-                || name.as_str().starts_with("x-openai-internal-")
-                || matches!(
-                    name.as_str(),
-                    "session-id" | "thread-id" | "x-openai-actor-authorization"
-                )))
-            || matches!(
-                name.as_str(),
-                "originator"
-                    | "user-agent"
-                    | "version"
-                    | "authorization"
-                    | "chatgpt-account-id"
-                    | "cookie"
-                    | "x-openai-internal-codex-residency"
-                    | "openai-beta"
-                    | "accept"
-                    | "content-type"
-                    | "content-encoding"
-                    | "x-codex-routing-hint"
-                    | "x-codex-turn-id"
-                    | "x-oai-attestation"
-                    | "x-oai-is"
-                    | "x-oai-is-update"
-                    | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
-            )
-        {
+        if matches!(
+            name.as_str(),
+            "originator"
+                | "user-agent"
+                | "version"
+                | "authorization"
+                | "chatgpt-account-id"
+                | "cookie"
+                | "x-openai-internal-codex-residency"
+                | "openai-beta"
+                | "accept"
+                | "content-type"
+                | "content-encoding"
+                | "x-codex-routing-hint"
+                | "x-codex-turn-id"
+                | "x-oai-attestation"
+                | "x-oai-is"
+                | "x-oai-is-update"
+                | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
+        ) {
             continue;
         }
         headers.remove(name);
