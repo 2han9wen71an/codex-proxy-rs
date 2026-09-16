@@ -606,37 +606,10 @@ pub trait ProviderCredentialStatePort: Send + Sync {
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
 }
 
-/// 账号级 cooldown 的来源类别；调度展示统一按 `rate_limited` 处理，
-/// 类别只用于把 429 临时限流与容量熔断自动冻结区分给恢复 worker。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ProviderCooldownKind {
-    /// 上游 429 临时限流；默认类别，兼容升级前未标记的存量 key。
-    #[default]
-    RateLimit,
-    /// 容量类错误高频触发后由熔断策略写入的自动冻结。
-    CapacityFreeze,
-}
+/// 账号级 cooldown 的来源类别；调度状态统一按 `rate_limited` 处理。
+pub use crate::account::AccountCooldownKind as ProviderCooldownKind;
 
-impl ProviderCooldownKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::RateLimit => "rate_limit",
-            Self::CapacityFreeze => "capacity_freeze",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "rate_limit" => Some(Self::RateLimit),
-            "capacity_freeze" => Some(Self::CapacityFreeze),
-            _ => None,
-        }
-    }
-}
-
-/// 临时 cooldown 只保存可丢失的调度截止时间，不进入账号持久状态。
+/// 可丢失的账号冷却事实，不进入持久状态；探测冻结到期后仍需确认恢复。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCooldown {
     account_id: ProviderAccountId,
@@ -688,6 +661,14 @@ impl ProviderCooldown {
     #[must_use]
     pub const fn until(&self) -> SystemTime {
         self.until
+    }
+
+    #[must_use]
+    pub const fn scheduling_state(&self) -> crate::account::AccountCooldown {
+        crate::account::AccountCooldown {
+            until: self.until,
+            kind: self.kind,
+        }
     }
 
     #[must_use]
@@ -822,10 +803,11 @@ pub trait ProviderCooldownPort: Send + Sync {
         in_flight: u32,
     ) -> BoxFuture<'a, Result<u32, ProviderStoreError>>;
 
-    /// 清空账号的容量失败计数与在途峰值证据；成功调用与解除冻结后调用。
-    fn clear_capacity_failures<'a>(
+    /// 普通请求成功后原子清除临时限流及失败证据；必须保留任何容量冻结。
+    fn clear_after_success<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
+        through_revision: CredentialRevision,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
 
     /// 读取窗口内观测到的在途并发峰值；无证据时返回 `None`。

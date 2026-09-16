@@ -31,7 +31,7 @@ export function useSettingsForm() {
     opsEventRetentionDays: 30,
     auditRetentionDays: 90,
 
-    accountAutoFreezeEnabled: true,
+    accountAutoFreezeEnabled: false,
     accountAutoFreezeThreshold: null as number | null,
     accountAutoFreezeWindowSeconds: null as number | null,
     accountAutoFreezeDurationSeconds: null as number | null,

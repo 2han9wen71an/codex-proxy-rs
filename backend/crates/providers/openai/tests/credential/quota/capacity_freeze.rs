@@ -59,7 +59,7 @@ async fn capacity_failures_below_threshold_do_not_freeze() {
     );
     assert!(
         quota
-            .rate_limited_until(account.id())
+            .cooldown(account.id())
             .await
             .expect("cooldown read")
             .is_none()
@@ -82,11 +82,12 @@ async fn capacity_failures_reaching_threshold_write_capacity_freeze_cooldown() {
     }
 
     let until = quota
-        .rate_limited_until(account.id())
+        .cooldown(account.id())
         .await
         .expect("cooldown read")
         .expect("freeze cooldown written");
     let remaining = until
+        .until
         .duration_since(SystemTime::now())
         .expect("freeze in the future");
     assert!(
@@ -96,7 +97,7 @@ async fn capacity_failures_reaching_threshold_write_capacity_freeze_cooldown() {
     let cooldown = cooldowns.read(account.id()).await.expect("read cooldown");
     assert_eq!(
         cooldown.expect("cooldown").kind(),
-        ProviderCooldownKind::CapacityFreeze
+        ProviderCooldownKind::CapacityFreezeProbe
     );
 }
 
@@ -118,7 +119,7 @@ async fn disabled_freeze_policy_records_nothing() {
     assert!(cooldowns.capacity_evidence(account.id()).is_none());
     assert!(
         quota
-            .rate_limited_until(account.id())
+            .cooldown(account.id())
             .await
             .expect("cooldown read")
             .is_none()
@@ -163,4 +164,32 @@ fn freeze_policy_rejects_out_of_range_configuration() {
             .is_err()
     );
     assert!(ProviderFreezePolicy::try_new(true, 12, 600, 7_200, true, None, true).is_ok());
+}
+
+#[tokio::test]
+async fn in_flight_success_does_not_release_a_new_capacity_freeze() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_freeze_late_success").await;
+    let account = store.account("acct_freeze_late_success").expect("account");
+    let (quota, cooldowns) = freeze_service(&store, freeze_policy(2)).await;
+    for _ in 0..2 {
+        quota
+            .apply_capacity_failure(&account, SystemTime::now())
+            .await;
+    }
+    let before = cooldowns.read(account.id()).await.expect("freeze");
+    quota
+        .record_successful_inference(&account, SystemTime::now())
+        .await
+        .expect("late success");
+    assert_eq!(
+        cooldowns.read(account.id()).await.expect("freeze remains"),
+        before
+    );
+    assert_eq!(
+        cooldowns
+            .capacity_evidence(account.id())
+            .map(|(count, _)| count),
+        Some(2)
+    );
 }

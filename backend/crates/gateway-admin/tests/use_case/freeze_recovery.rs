@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as TimeDelta, Utc};
 use gateway_admin::freeze_recovery::{FreezeRecoveryDeps, FreezeRecoveryTask};
-use gateway_admin::model::accounts::AccountRuntimeSnapshot;
+use gateway_admin::model::MutationContext;
+use gateway_admin::model::accounts::{AccountFreeze, AccountRuntimeSnapshot};
 use gateway_admin::model::settings::{
     AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings,
 };
-use gateway_admin::model::{MutationContext, Revision};
 use gateway_admin::ports::store::{
     AccountRuntimeStore, AccountStore, AdminStoreError, AdminStoreResult, SettingsStore,
 };
@@ -99,14 +99,14 @@ fn store_unavailable() -> AdminStoreError {
 
 /// 记录解冻/顺延调用的运行态 fake；冻结与峰值证据由测试预置。
 struct FreezeRuntimeStore {
-    freezes: BTreeMap<String, DateTime<Utc>>,
+    freezes: BTreeMap<String, AccountFreeze>,
     peaks: BTreeMap<String, u32>,
     cleared: Mutex<Vec<String>>,
     extended: Mutex<Vec<(String, DateTime<Utc>)>>,
 }
 
 impl FreezeRuntimeStore {
-    fn new(freezes: BTreeMap<String, DateTime<Utc>>, peaks: BTreeMap<String, u32>) -> Arc<Self> {
+    fn new(freezes: BTreeMap<String, AccountFreeze>, peaks: BTreeMap<String, u32>) -> Arc<Self> {
         Arc::new(Self {
             freezes,
             peaks,
@@ -137,7 +137,7 @@ impl AccountRuntimeStore for FreezeRuntimeStore {
         Ok(AccountRuntimeSnapshot::default())
     }
 
-    async fn active_freezes(&self) -> AdminStoreResult<BTreeMap<String, DateTime<Utc>>> {
+    async fn active_freezes(&self) -> AdminStoreResult<BTreeMap<String, AccountFreeze>> {
         Ok(self.freezes.clone())
     }
 
@@ -151,28 +151,24 @@ impl AccountRuntimeStore for FreezeRuntimeStore {
             .collect())
     }
 
-    async fn clear_rate_limit(
+    async fn finish_freeze(
         &self,
         account_id: &str,
-        _through_revision: Revision,
+        expected: &AccountFreeze,
+        postpone_until: Option<DateTime<Utc>>,
     ) -> AdminStoreResult<bool> {
-        self.cleared
-            .lock()
-            .expect("cleared lock")
-            .push(account_id.to_owned());
-        Ok(true)
-    }
-
-    async fn extend_rate_limit(
-        &self,
-        account_id: &str,
-        _through_revision: Revision,
-        until: DateTime<Utc>,
-    ) -> AdminStoreResult<bool> {
-        self.extended
-            .lock()
-            .expect("extended lock")
-            .push((account_id.to_owned(), until));
+        assert_eq!(self.freezes.get(account_id), Some(expected));
+        if let Some(until) = postpone_until {
+            self.extended
+                .lock()
+                .expect("extended")
+                .push((account_id.to_owned(), until));
+        } else {
+            self.cleared
+                .lock()
+                .expect("cleared")
+                .push(account_id.to_owned());
+        }
         Ok(true)
     }
 }
@@ -256,8 +252,20 @@ async fn run_cycle(task: &FreezeRecoveryTask) {
         .expect("freeze recovery cycle");
 }
 
-fn freeze_due() -> BTreeMap<String, DateTime<Utc>> {
-    BTreeMap::from([("acct_test".to_owned(), Utc::now() + TimeDelta::seconds(30))])
+fn freeze_until(until: DateTime<Utc>) -> BTreeMap<String, AccountFreeze> {
+    BTreeMap::from([(
+        "acct_test".to_owned(),
+        AccountFreeze {
+            credential_revision: revision(1),
+            until,
+            generation: "freeze-generation".to_owned(),
+            requires_probe: true,
+        },
+    )])
+}
+
+fn freeze_due() -> BTreeMap<String, AccountFreeze> {
+    freeze_until(Utc::now() - TimeDelta::seconds(1))
 }
 
 #[tokio::test]
@@ -301,7 +309,7 @@ async fn probe_failure_postpones_freeze() {
 }
 
 #[tokio::test]
-async fn disabled_policy_is_a_no_op() {
+async fn disabled_policy_releases_due_freeze_without_probing() {
     let runtime = FreezeRuntimeStore::new(freeze_due(), BTreeMap::new());
     let (task, _store) = recovery_task(
         runtime_settings(false, true, false),
@@ -312,14 +320,14 @@ async fn disabled_policy_is_a_no_op() {
 
     run_cycle(&task).await;
 
-    assert!(runtime.cleared().is_empty());
+    assert_eq!(runtime.cleared(), vec!["acct_test".to_owned()]);
     assert!(runtime.extended().is_empty());
 }
 
 #[tokio::test]
 async fn adaptive_concurrency_lowers_limit_to_observed_peak() {
     let runtime = FreezeRuntimeStore::new(
-        BTreeMap::from([("acct_test".to_owned(), Utc::now() + TimeDelta::hours(1))]),
+        freeze_until(Utc::now() + TimeDelta::hours(1)),
         BTreeMap::from([("acct_test".to_owned(), 4_u32)]),
     );
     let (task, store) = recovery_task(
@@ -332,16 +340,11 @@ async fn adaptive_concurrency_lowers_limit_to_observed_peak() {
     run_cycle(&task).await;
 
     // 峰值 4 × 0.8 = 3（不低于下限 2），低于全局默认 5，应下调到 3。
-    let commands = store.update_commands();
-    assert_eq!(commands.len(), 1);
     assert_eq!(
-        commands[0]
-            .concurrency_limit
-            .expect("concurrency limit adapted")
-            .get(),
-        3
+        *store.lowered_limits.lock().expect("lowered limits"),
+        vec![("acct_test".to_owned(), 3)]
     );
-    assert_eq!(commands[0].account_id, "acct_test");
+    assert!(store.update_commands().is_empty());
     assert!(runtime.extended().is_empty());
     assert!(runtime.cleared().is_empty());
 }
@@ -349,7 +352,7 @@ async fn adaptive_concurrency_lowers_limit_to_observed_peak() {
 #[tokio::test]
 async fn adaptive_concurrency_never_raises_limit() {
     let runtime = FreezeRuntimeStore::new(
-        BTreeMap::from([("acct_test".to_owned(), Utc::now() + TimeDelta::hours(1))]),
+        freeze_until(Utc::now() + TimeDelta::hours(1)),
         BTreeMap::from([("acct_test".to_owned(), 40_u32)]),
     );
     let (task, store) = recovery_task(
@@ -369,7 +372,7 @@ async fn adaptive_concurrency_never_raises_limit() {
 #[tokio::test]
 async fn probe_skips_freezes_far_from_expiry() {
     let runtime = FreezeRuntimeStore::new(
-        BTreeMap::from([("acct_test".to_owned(), Utc::now() + TimeDelta::hours(1))]),
+        freeze_until(Utc::now() + TimeDelta::hours(1)),
         BTreeMap::new(),
     );
     let (task, _store) = recovery_task(

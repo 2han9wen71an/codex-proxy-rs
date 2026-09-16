@@ -615,7 +615,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
                             last_started_at: None,
                             quota_reset_at: None,
                             quota_remaining_rank: None,
-                            rate_limited_until: None,
+                            cooldown: None,
                             failure_rate_basis_points: None,
                             first_output_latency_ms: None,
                         },
@@ -1118,11 +1118,19 @@ impl ProviderCooldownPort for MemoryCooldownPort {
         })
     }
 
-    fn clear_capacity_failures<'a>(
+    fn clear_after_success<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
+        _through_revision: gateway_core::account::CredentialRevision,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async move {
+            let mut cooldowns = self.cooldowns.lock().expect("cooldown lock");
+            if cooldowns.get(account_id).is_some_and(|value| {
+                value.kind().is_capacity_freeze() || value.credential_revision() > _through_revision
+            }) {
+                return Ok(());
+            }
+            cooldowns.remove(account_id);
             self.capacity_failures
                 .lock()
                 .expect("capacity failures lock")

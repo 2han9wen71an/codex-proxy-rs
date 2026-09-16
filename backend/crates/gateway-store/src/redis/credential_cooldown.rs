@@ -24,17 +24,21 @@ local incoming = tonumber(ARGV[1])
 local incoming_until = tonumber(ARGV[2])
 if current > incoming then return 0 end
 local current_until = tonumber(redis.call('HGET', KEYS[1], 'until_ms') or '0')
-if current == incoming and current_until >= incoming_until then return 0 end
+local current_kind = redis.call('HGET', KEYS[1], 'kind') or 'rate_limit'
+if current == incoming then
+  if current_kind ~= 'rate_limit' and ARGV[4] == 'rate_limit' then return 0 end
+  if current_kind == ARGV[4] and current_until >= incoming_until then return 0 end
+  incoming_until = math.max(current_until, incoming_until)
+end
 local clock = redis.call('TIME')
 local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
-if incoming_until <= now_ms then
-  redis.call('DEL', KEYS[1])
-  if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[3]) end
-  return 0
+if incoming_until <= now_ms and ARGV[4] ~= 'capacity_freeze_probe' then return 0 end
+redis.call('HSET', KEYS[1], 'revision', ARGV[1], 'until_ms', incoming_until, 'kind', ARGV[4], 'generation', ARGV[5])
+if ARGV[4] == 'capacity_freeze_probe' then
+  redis.call('PERSIST', KEYS[1])
+else
+  redis.call('PEXPIRE', KEYS[1], incoming_until - now_ms + 60000)
 end
-redis.call('HSET', KEYS[1], 'revision', ARGV[1], 'until_ms', ARGV[2], 'kind', ARGV[4])
-local ttl = incoming_until - now_ms + 60000
-redis.call('PEXPIRE', KEYS[1], ttl)
 if #KEYS > 1 then redis.call('ZADD', KEYS[2], incoming_until, ARGV[3]) end
 return 1
 "#;
@@ -42,20 +46,15 @@ return 1
 const READ_SCRIPT: &str = r#"
 local revision = redis.call('HGET', KEYS[1], 'revision')
 local until_ms = redis.call('HGET', KEYS[1], 'until_ms')
-if revision == false or until_ms == false then
-  redis.call('DEL', KEYS[1])
-  if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[1]) end
-  return {0, '0', '0', 'rate_limit'}
-end
+local kind = redis.call('HGET', KEYS[1], 'kind') or 'rate_limit'
 local clock = redis.call('TIME')
 local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
-if tonumber(until_ms) <= now_ms then
+if revision == false or until_ms == false or (kind ~= 'capacity_freeze_probe' and tonumber(until_ms) <= now_ms) then
   redis.call('DEL', KEYS[1])
   if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[1]) end
-  return {0, '0', '0', 'rate_limit'}
+  return {0, '0', '0', 'rate_limit', ''}
 end
-local kind = redis.call('HGET', KEYS[1], 'kind') or 'rate_limit'
-return {1, revision, until_ms, kind}
+return {1, revision, until_ms, kind, redis.call('HGET', KEYS[1], 'generation') or ''}
 "#;
 
 const INVALIDATE_SCRIPT: &str = r#"
@@ -66,11 +65,38 @@ if #KEYS > 1 then redis.call('ZREM', KEYS[2], ARGV[2]) end
 return 1
 "#;
 
-const ACTIVE_COOLDOWNS_SCRIPT: &str = r#"
-local clock = redis.call('TIME')
-local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
-redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now_ms)
-return redis.call('ZRANGEBYSCORE', KEYS[1], '(' .. now_ms, '+inf', 'WITHSCORES')
+// 普通推理成功只能清除临时限流和未形成冻结的证据，判断与删除必须原子执行。
+const SUCCESS_SCRIPT: &str = r#"
+local current = tonumber(redis.call('HGET', KEYS[1], 'revision') or '0')
+local kind = redis.call('HGET', KEYS[1], 'kind') or 'rate_limit'
+if current > tonumber(ARGV[1]) or kind ~= 'rate_limit' then return 0 end
+redis.call('DEL', KEYS[1], KEYS[3], KEYS[4])
+redis.call('ZREM', KEYS[2], ARGV[2])
+return 1
+"#;
+
+// 探测结果只能修改读到的这一代冻结；删除后重建同 revision 的冻结也不匹配。
+const FINISH_FREEZE_SCRIPT: &str = r#"
+if redis.call('HGET', KEYS[1], 'generation') ~= ARGV[2]
+  or redis.call('HGET', KEYS[1], 'revision') ~= ARGV[1] then return 0 end
+local kind = redis.call('HGET', KEYS[1], 'kind')
+if kind ~= 'capacity_freeze' and kind ~= 'capacity_freeze_probe' then return 0 end
+if ARGV[4] == '' then
+  redis.call('DEL', KEYS[1], KEYS[3], KEYS[4])
+  redis.call('ZREM', KEYS[2], ARGV[3])
+else
+  local until_ms = math.max(tonumber(redis.call('HGET', KEYS[1], 'until_ms')), tonumber(ARGV[4]))
+  redis.call('HSET', KEYS[1], 'until_ms', until_ms, 'generation', ARGV[5])
+  redis.call('ZADD', KEYS[2], until_ms, ARGV[3])
+  if kind == 'capacity_freeze_probe' then
+    redis.call('PERSIST', KEYS[1])
+  else
+    local clock = redis.call('TIME')
+    local now_ms = (tonumber(clock[1]) * 1000) + math.floor(tonumber(clock[2]) / 1000)
+    redis.call('PEXPIRE', KEYS[1], math.max(1, until_ms - now_ms + 60000))
+  end
+end
+return 1
 "#;
 
 // 每次容量失败都顺延窗口 TTL（与刷新退避计数同语义），并把本次观测到的
@@ -189,6 +215,7 @@ impl RedisCredentialCooldownRepository {
                 .arg(until_ms)
                 .arg(index_member)
                 .arg(kind.as_str())
+                .arg(uuid::Uuid::new_v4().to_string())
                 .invoke_async::<i64>(&mut connection)
                 .await
         } else {
@@ -198,6 +225,7 @@ impl RedisCredentialCooldownRepository {
                 .arg(until_ms)
                 .arg("")
                 .arg(kind.as_str())
+                .arg(uuid::Uuid::new_v4().to_string())
                 .invoke_async::<i64>(&mut connection)
                 .await
         }
@@ -209,7 +237,7 @@ impl RedisCredentialCooldownRepository {
         &self,
         key: String,
         index_member: Option<&str>,
-    ) -> StoreResult<Option<(Revision, DateTime<Utc>, ProviderCooldownKind)>> {
+    ) -> StoreResult<Option<(Revision, DateTime<Utc>, ProviderCooldownKind, String)>> {
         let mut connection = self.connection.clone();
         let result = if let Some(index_member) = index_member {
             Script::new(READ_SCRIPT)
@@ -225,7 +253,7 @@ impl RedisCredentialCooldownRepository {
                 .invoke_async(&mut connection)
                 .await
         };
-        let (present, revision, until_ms, kind): (i64, String, String, String) =
+        let (present, revision, until_ms, kind, generation): (i64, String, String, String, String) =
             result.map_err(|_| redis_unavailable("read credential cooldown"))?;
         if present == 0 {
             return Ok(None);
@@ -239,7 +267,12 @@ impl RedisCredentialCooldownRepository {
         let cooldown_until = DateTime::from_timestamp_millis(until_ms)
             .ok_or_else(|| invalid("cached cooldown expiry is invalid"))?;
         let kind = ProviderCooldownKind::parse(&kind).unwrap_or(ProviderCooldownKind::RateLimit);
-        Ok(Some((Revision::new(revision)?, cooldown_until, kind)))
+        Ok(Some((
+            Revision::new(revision)?,
+            cooldown_until,
+            kind,
+            generation,
+        )))
     }
 
     async fn invalidate_at_key(
@@ -269,63 +302,90 @@ impl RedisCredentialCooldownRepository {
         Ok(removed == 1)
     }
 
-    pub(crate) async fn active_cooldowns(&self) -> StoreResult<AccountRuntimeSnapshot> {
+    async fn indexed_accounts(&self) -> StoreResult<Vec<String>> {
         let mut connection = self.connection.clone();
-        let values = Script::new(ACTIVE_COOLDOWNS_SCRIPT)
-            .key(self.active_index_key())
-            .invoke_async::<Vec<String>>(&mut connection)
+        redis::cmd("ZRANGE")
+            .arg(self.active_index_key())
+            .arg(0)
+            .arg(-1)
+            .query_async(&mut connection)
             .await
-            .map_err(|_| redis_unavailable("list active credential cooldowns"))?;
-        if values.len() % 2 != 0 {
-            return Err(invalid("active cooldown index is invalid"));
-        }
-        let mut rate_limited_until = std::collections::BTreeMap::new();
-        for pair in values.chunks_exact(2) {
-            let until_ms = pair[1]
-                .parse::<i64>()
-                .map_err(|_| invalid("active cooldown expiry is invalid"))?;
-            let until = DateTime::from_timestamp_millis(until_ms)
-                .ok_or_else(|| invalid("active cooldown expiry is invalid"))?;
-            rate_limited_until.insert(pair[0].clone(), until);
+            .map_err(|_| redis_unavailable("list indexed cooldowns"))
+    }
+
+    pub(crate) async fn active_cooldowns(&self) -> StoreResult<AccountRuntimeSnapshot> {
+        let mut cooldown = BTreeMap::new();
+        for account_id in self.indexed_accounts().await? {
+            if let Some((_, until, kind, _)) = self
+                .read_at_key(self.key(&account_id)?, Some(&account_id))
+                .await?
+            {
+                cooldown.insert(
+                    account_id,
+                    gateway_core::account::AccountCooldown {
+                        until: until.into(),
+                        kind,
+                    },
+                );
+            }
         }
         Ok(AccountRuntimeSnapshot {
-            rate_limited_until,
+            cooldown,
             in_flight: None,
         })
     }
 
-    /// 活跃冷却中类别为容量熔断自动冻结的条目；恢复 worker 的工作集来源。
-    /// 429 临时限流不进入该列表，避免恢复探测被普通限流放大。
-    pub(crate) async fn active_freezes(&self) -> StoreResult<BTreeMap<String, DateTime<Utc>>> {
-        let mut connection = self.connection.clone();
-        let values = Script::new(ACTIVE_COOLDOWNS_SCRIPT)
-            .key(self.active_index_key())
-            .invoke_async::<Vec<String>>(&mut connection)
-            .await
-            .map_err(|_| redis_unavailable("list active credential freezes"))?;
-        if values.len() % 2 != 0 {
-            return Err(invalid("active cooldown index is invalid"));
-        }
+    /// 包含已到探测时间但尚未确认恢复的冻结；到期不能从 worker 工作集中移除。
+    pub(crate) async fn active_freezes(
+        &self,
+    ) -> StoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountFreeze>> {
         let mut freezes = BTreeMap::new();
-        for pair in values.chunks_exact(2) {
-            let account_id = pair[0].clone();
-            let kind: Option<String> = redis::cmd("HGET")
-                .arg(self.key(&account_id)?)
-                .arg("kind")
-                .query_async(&mut connection)
-                .await
-                .map_err(|_| redis_unavailable("read cooldown kind"))?;
-            if kind.as_deref() != Some(ProviderCooldownKind::CapacityFreeze.as_str()) {
-                continue;
+        for account_id in self.indexed_accounts().await? {
+            if let Some((revision, until, kind, generation)) = self
+                .read_at_key(self.key(&account_id)?, Some(&account_id))
+                .await?
+                && kind.is_capacity_freeze()
+            {
+                freezes.insert(
+                    account_id,
+                    gateway_admin::model::accounts::AccountFreeze {
+                        credential_revision: gateway_admin::model::Revision::new(revision.get())
+                            .map_err(|_| invalid("freeze revision"))?,
+                        until,
+                        generation,
+                        requires_probe: kind.requires_probe(),
+                    },
+                );
             }
-            let until_ms = pair[1]
-                .parse::<i64>()
-                .map_err(|_| invalid("active cooldown expiry is invalid"))?;
-            let until = DateTime::from_timestamp_millis(until_ms)
-                .ok_or_else(|| invalid("active cooldown expiry is invalid"))?;
-            freezes.insert(account_id, until);
         }
         Ok(freezes)
+    }
+
+    pub(crate) async fn finish_freeze(
+        &self,
+        account_id: &str,
+        expected: &gateway_admin::model::accounts::AccountFreeze,
+        postpone_until: Option<DateTime<Utc>>,
+    ) -> StoreResult<bool> {
+        let mut connection = self.connection.clone();
+        let changed: i64 = Script::new(FINISH_FREEZE_SCRIPT)
+            .key(self.key(account_id)?)
+            .key(self.active_index_key())
+            .key(self.capacity_failures_key(account_id)?)
+            .key(self.capacity_peak_key(account_id)?)
+            .arg(expected.credential_revision.get())
+            .arg(&expected.generation)
+            .arg(account_id)
+            .arg(
+                postpone_until
+                    .map(|until| until.timestamp_millis().to_string())
+                    .unwrap_or_default(),
+            )
+            .arg(uuid::Uuid::new_v4().to_string())
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|_| redis_unavailable("finish capacity freeze"))?;
+        Ok(changed == 1)
     }
 
     /// 读取窗口内观测到的在途并发峰值；key 随窗口 TTL 过期，无需额外清理。
@@ -376,7 +436,7 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
             .await
             .map(|value| {
                 value.map(
-                    |(credential_revision, cooldown_until, kind)| CredentialCooldown {
+                    |(credential_revision, cooldown_until, kind, _)| CredentialCooldown {
                         provider_account_id: provider_account_id.to_owned(),
                         credential_revision,
                         cooldown_until,
@@ -413,8 +473,11 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
         // 账号删除：清除该账号的 account key 与全部 model-scoped key。
         // 用 SCAN 精确匹配命名空间内该账号前缀，避免 KEYS 阻塞。
         let mut connection = self.connection.clone();
-        let account_key = self.key(provider_account_id)?;
-        let mut keys = vec![account_key.clone()];
+        let mut keys = vec![
+            self.key(provider_account_id)?,
+            self.capacity_failures_key(provider_account_id)?,
+            self.capacity_peak_key(provider_account_id)?,
+        ];
         let pattern = format!(
             "{}:account:{}:cooldown:*",
             self.namespace,
@@ -437,21 +500,21 @@ impl CredentialCooldownRepository for RedisCredentialCooldownRepository {
                 break;
             }
         }
-        if keys.is_empty() {
-            return Ok(false);
-        }
-        let removed: i64 = redis::cmd("DEL")
-            .arg(keys)
-            .query_async(&mut connection)
-            .await
-            .map_err(|_| redis_unavailable("delete account cooldown keys"))?;
-        let index_removed: i64 = redis::cmd("ZREM")
-            .arg(self.active_index_key())
-            .arg(provider_account_id)
-            .query_async(&mut connection)
-            .await
-            .map_err(|_| redis_unavailable("remove active account cooldown"))?;
-        Ok(removed > 0 || index_removed > 0)
+        // 删除与索引移除同属一个原子边界；否则新冻结可能在两步之间写入后丢失索引。
+        let removed: i64 = Script::new(
+            r#"
+            local removed = 0
+            for i = 2, #KEYS do removed = removed + redis.call('DEL', KEYS[i]) end
+            return removed + redis.call('ZREM', KEYS[1], ARGV[1])
+        "#,
+        )
+        .key(self.active_index_key())
+        .key(keys)
+        .arg(provider_account_id)
+        .invoke_async(&mut connection)
+        .await
+        .map_err(|_| redis_unavailable("delete account cooldowns and index"))?;
+        Ok(removed > 0)
     }
 }
 
@@ -550,7 +613,7 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
             )
             .await
             .map_err(|_| provider_unavailable("read scoped credential cooldown"))?
-            .map(|(revision, until, _)| {
+            .map(|(revision, until, _, _)| {
                 Ok(ProviderScopedCooldown::new(
                     account_id.clone(),
                     CredentialRevision::new(revision.get())
@@ -622,24 +685,32 @@ impl ProviderCooldownPort for RedisCredentialCooldownRepository {
         })
     }
 
-    fn clear_capacity_failures<'a>(
+    fn clear_after_success<'a>(
         &'a self,
         account_id: &'a ProviderAccountId,
+        through_revision: CredentialRevision,
     ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async move {
             let mut connection = self.connection.clone();
-            let failures = self
-                .capacity_failures_key(account_id.as_str())
-                .map_err(|_| provider_invalid("encode capacity failure key"))?;
-            let peak = self
-                .capacity_peak_key(account_id.as_str())
-                .map_err(|_| provider_invalid("encode capacity peak key"))?;
-            let _: i64 = redis::cmd("DEL")
-                .arg(failures)
-                .arg(peak)
-                .query_async(&mut connection)
+            let _: i64 = Script::new(SUCCESS_SCRIPT)
+                .key(
+                    self.key(account_id.as_str())
+                        .map_err(|_| provider_invalid("cooldown key"))?,
+                )
+                .key(self.active_index_key())
+                .key(
+                    self.capacity_failures_key(account_id.as_str())
+                        .map_err(|_| provider_invalid("capacity count key"))?,
+                )
+                .key(
+                    self.capacity_peak_key(account_id.as_str())
+                        .map_err(|_| provider_invalid("capacity peak key"))?,
+                )
+                .arg(through_revision.get())
+                .arg(account_id.as_str())
+                .invoke_async(&mut connection)
                 .await
-                .map_err(|_| provider_unavailable("clear capacity failures"))?;
+                .map_err(|_| provider_unavailable("clear cooldown after success"))?;
             Ok(())
         })
     }

@@ -557,7 +557,11 @@ impl CodexCredentialQuotaService {
             account.id().clone(),
             account.revision(),
             until,
-            ProviderCooldownKind::CapacityFreeze,
+            if policy.probe_enabled() {
+                ProviderCooldownKind::CapacityFreezeProbe
+            } else {
+                ProviderCooldownKind::CapacityFreeze
+            },
         );
         if self.cooldowns.put_if_later(cooldown).await.is_ok() {
             tracing::warn!(
@@ -714,13 +718,11 @@ impl CodexCredentialQuotaService {
             }
         }
         self.cooldowns
-            .clear(account.id(), account.revision())
+            .clear_after_success(account.id(), account.revision())
             .await
             .map_err(|error| CodexCredentialQuotaError::Store {
                 detail: error.to_string(),
             })?;
-        // 容量失败计数随窗口 TTL 自愈；真实成功后尽力清空，失败不影响成功事实。
-        let _ = self.cooldowns.clear_capacity_failures(account.id()).await;
         Ok(())
     }
 
@@ -1063,11 +1065,11 @@ impl CodexCredentialQuotaService {
         Ok(())
     }
 
-    /// 读取账号当前是否处于临时限流（429）冷却，及到期时间。
-    pub async fn rate_limited_until(
+    /// 读取有效的账号冷却事实；等待恢复探测的冻结到期后仍有效。
+    pub async fn cooldown(
         &self,
         account_id: &ProviderAccountId,
-    ) -> Result<Option<SystemTime>, CodexCredentialQuotaError> {
+    ) -> Result<Option<gateway_core::account::AccountCooldown>, CodexCredentialQuotaError> {
         let Some(cooldown) = self.cooldowns.read(account_id).await.map_err(|error| {
             CodexCredentialQuotaError::Store {
                 detail: error.to_string(),
@@ -1076,11 +1078,8 @@ impl CodexCredentialQuotaService {
         else {
             return Ok(None);
         };
-        let until = cooldown.until();
-        if until <= SystemTime::now() {
-            return Ok(None);
-        }
-        Ok(Some(until))
+        let state = cooldown.scheduling_state();
+        Ok(state.is_active(SystemTime::now()).then_some(state))
     }
 
     /// 读取单账号最后一次落库的 Provider quota，并由 Codex 域解析展示窗口。

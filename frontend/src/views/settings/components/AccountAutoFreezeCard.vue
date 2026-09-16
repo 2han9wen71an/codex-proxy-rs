@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { Activity, Gauge, Snowflake } from '@lucide/vue'
+import { Activity, Gauge, Snowflake, Timer } from '@lucide/vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseCheckbox from '@/components/base/BaseCheckbox.vue'
 import BaseFormItem from '@/components/base/BaseForm/FormItem.vue'
 import BaseForm from '@/components/base/BaseForm/index.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -19,23 +20,23 @@ const adaptiveConcurrency = defineModel<boolean>('adaptiveConcurrency', { requir
 <template>
   <BaseCard
     title="账号自动冻结"
-    description="容量类错误高频出现时冻结账号，到期探测后自动恢复"
+    description="容量类错误高频出现时暂停账号调度，在账号管理中显示为限流中"
   >
     <BaseForm class="max-w-6xl sm:grid-cols-2">
-      <div class="col-span-full flex min-h-6 items-center justify-between gap-3">
-        <span class="text-cp leading-none font-medium text-cp-text-secondary">启用自动冻结</span>
-        <BaseSwitch
-          v-model="enabled"
-          label="切换账号自动冻结"
-        />
-      </div>
+      <BaseSwitch
+        v-model="enabled"
+        class="col-span-full justify-self-start"
+        label="启用自动冻结"
+        show-label
+      />
 
       <BaseFormItem
         label="触发阈值"
-        description="统计窗口内容量类失败的次数（按尝试计数），达到后冻结该账号"
+        description="窗口内累计失败尝试达到此次数后触发"
       >
         <BaseInput
           v-model="threshold"
+          :disabled="!enabled"
           aria-label="触发阈值"
           type="number"
           min="2"
@@ -45,15 +46,19 @@ const adaptiveConcurrency = defineModel<boolean>('adaptiveConcurrency', { requir
           <template #prefix>
             <Activity class="size-4" />
           </template>
+          <template #suffix>
+            <span class="text-cp-sm">次</span>
+          </template>
         </BaseInput>
       </BaseFormItem>
 
       <BaseFormItem
-        label="统计窗口（秒）"
-        description="失败计数随每次失败滑动顺延的窗口长度"
+        label="统计窗口"
+        description="每次失败后，计数有效期向后顺延"
       >
         <BaseInput
           v-model="windowSeconds"
+          :disabled="!enabled"
           aria-label="统计窗口秒数"
           type="number"
           min="60"
@@ -61,18 +66,22 @@ const adaptiveConcurrency = defineModel<boolean>('adaptiveConcurrency', { requir
           step="1"
         >
           <template #prefix>
-            <Activity class="size-4" />
+            <Timer class="size-4" />
+          </template>
+          <template #suffix>
+            <span class="text-cp-sm">秒</span>
           </template>
         </BaseInput>
       </BaseFormItem>
 
       <BaseFormItem
-        label="冻结时长（秒）"
-        description="冻结持续时间；恢复探测失败时按该时长顺延"
+        label="冷却时长"
+        description="探测失败时，按此时长延后恢复"
       >
         <BaseInput
           v-model="durationSeconds"
-          aria-label="冻结时长秒数"
+          :disabled="!enabled"
+          aria-label="冷却时长秒数"
           type="number"
           min="300"
           max="604800"
@@ -81,15 +90,26 @@ const adaptiveConcurrency = defineModel<boolean>('adaptiveConcurrency', { requir
           <template #prefix>
             <Snowflake class="size-4" />
           </template>
+          <template #suffix>
+            <span class="text-cp-sm">秒</span>
+          </template>
         </BaseInput>
       </BaseFormItem>
-
       <BaseFormItem
         label="恢复探测模型"
-        description="留空时自动选择账号可用的第一个模型；探测内容为极短的确认回复"
+        description="启用后需探测成功才恢复，模型留空时选择首个可用模型"
       >
+        <template #extra>
+          <BaseCheckbox
+            v-model="probeEnabled"
+            :disabled="!enabled"
+            label="恢复前探测"
+            show-label
+          />
+        </template>
         <BaseInput
           v-model="probeModel"
+          :disabled="!enabled || !probeEnabled"
           aria-label="恢复探测模型"
           placeholder="留空自动选择"
         >
@@ -99,21 +119,16 @@ const adaptiveConcurrency = defineModel<boolean>('adaptiveConcurrency', { requir
         </BaseInput>
       </BaseFormItem>
 
-      <div class="col-span-full grid gap-4 pt-4 sm:grid-cols-2">
-        <div class="flex min-h-6 items-center justify-between gap-3">
-          <span class="text-cp leading-none font-medium text-cp-text-secondary">恢复前探测</span>
-          <BaseSwitch
-            v-model="probeEnabled"
-            label="切换恢复前探测"
-          />
-        </div>
-        <div class="flex min-h-6 items-center justify-between gap-3">
-          <span class="text-cp leading-none font-medium text-cp-text-secondary">自适应并发下调</span>
-          <BaseSwitch
-            v-model="adaptiveConcurrency"
-            label="切换自适应并发下调"
-          />
-        </div>
+      <div class="col-span-full flex flex-wrap items-center gap-x-3 gap-y-2">
+        <BaseCheckbox
+          v-model="adaptiveConcurrency"
+          :disabled="!enabled"
+          label="自适应并发下调"
+          show-label
+        />
+        <p class="m-0 text-cp-sm leading-5 text-cp-text-secondary">
+          修改账号并发上限，恢复后不自动调高
+        </p>
       </div>
     </BaseForm>
   </BaseCard>

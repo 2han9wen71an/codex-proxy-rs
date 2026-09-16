@@ -666,7 +666,7 @@ impl ProviderLeasePort for TestLeases {
                             last_started_at: None,
                             quota_reset_at: None,
                             quota_remaining_rank: None,
-                            rate_limited_until: None,
+                            cooldown: None,
                             failure_rate_basis_points: None,
                             first_output_latency_ms: None,
                         },
@@ -872,9 +872,10 @@ impl ProviderCooldownPort for TestCooldown {
         Box::pin(async { Ok(0) })
     }
 
-    fn clear_capacity_failures<'a>(
+    fn clear_after_success<'a>(
         &'a self,
         _account_id: &'a ProviderAccountId,
+        _through_revision: gateway_core::account::CredentialRevision,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async { Ok(()) })
     }

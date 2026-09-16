@@ -2,8 +2,7 @@
 //!
 //! 冻结事实保存在可丢失的 Redis 冷却中，本服务只组合 Admin 端口：
 //! 观测（`AccountRuntimeStore`）、探测（`AccountsService`）与写回
-//! （`update`/`clear_rate_limit`/`extend_rate_limit`）。写操作全部幂等：
-//! 冷却写入带 revision 防腐，并发下调只降不升，重复执行不产生额外变更。
+//! （原子降低并发 / 按冻结代次结束探测）。旧观测不会覆盖管理员操作。
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -17,14 +16,12 @@ use gateway_core::task::{ScheduledTask, WorkerCycleContext, WorkerTaskError};
 use tracing::warn;
 
 use crate::model::accounts::{
-    AccountConnectionTestEvent, AccountPageItem, AccountRuntimeSnapshot, UpdateAccount,
+    AccountConnectionTestEvent, AccountFreeze, AccountPageItem, AccountRuntimeSnapshot,
 };
 use crate::model::{MutationActor, MutationContext};
 use crate::ports::store::{AccountRuntimeStore, AccountStore, SettingsStore};
 use crate::use_case::accounts::AccountsService;
 
-/// 探测提前量：冻结即将到期前发起探测，避免到期瞬间放行未恢复账号。
-const PROBE_LEAD_TIME: Duration = Duration::from_secs(60);
 /// 自适应并发下调保留系数：下调到观测在途峰值的 80%。
 const ADAPTIVE_CONCURRENCY_FACTOR: f64 = 0.8;
 /// 自适应并发下限：过低的并发让账号几乎不可用，宁可保持冻结。
@@ -64,7 +61,7 @@ impl FreezeRecoveryTask {
         }
     }
 
-    /// 读取启用的冻结策略；读取或校验失败一律视为关闭，编排不得放大故障。
+    /// 读取冻结策略；读取或校验失败跳过本轮，不能把未知配置当作允许解冻。
     async fn freeze_policy(&self) -> Option<gateway_core::provider_ports::ProviderFreezePolicy> {
         let settings = self.deps.settings.load_runtime_settings().await.ok()?;
         gateway_core::provider_ports::ProviderFreezePolicy::try_new(
@@ -77,10 +74,9 @@ impl FreezeRecoveryTask {
             settings.account_auto_freeze_adaptive_concurrency,
         )
         .ok()
-        .filter(|policy| policy.enabled())
     }
 
-    async fn active_freezes(&self) -> BTreeMap<String, DateTime<Utc>> {
+    async fn active_freezes(&self) -> BTreeMap<String, AccountFreeze> {
         self.deps.runtime.active_freezes().await.unwrap_or_default()
     }
 
@@ -92,19 +88,17 @@ impl FreezeRecoveryTask {
         if freezes.is_empty() {
             return;
         }
-        if policy.adaptive_concurrency() {
+        if policy.enabled() && policy.adaptive_concurrency() {
             self.adapt_concurrency_limits(&freezes, &policy).await;
         }
-        if policy.probe_enabled() {
-            self.recover_due_freezes(&freezes, &policy).await;
-        }
+        self.recover_due_freezes(&freezes, &policy).await;
     }
 
     /// 对冻结中的账号执行自适应并发下调：目标为观测在途峰值的 80%（下限 2），
     /// 只降不升；未观测到峰值证据的账号保持现状。
     async fn adapt_concurrency_limits(
         &self,
-        freezes: &BTreeMap<String, DateTime<Utc>>,
+        freezes: &BTreeMap<String, AccountFreeze>,
         policy: &gateway_core::provider_ports::ProviderFreezePolicy,
     ) {
         let account_ids = freezes.keys().cloned().collect::<Vec<_>>();
@@ -115,61 +109,32 @@ impl FreezeRecoveryTask {
             let Some(target) = adaptive_target(peak) else {
                 continue;
             };
-            let Some(Some(item)) = self.load_account(&account_id).await else {
+            let Ok(account) = ProviderAccountId::new(account_id.clone()) else {
                 continue;
             };
-            let record = &item.account;
-            if !record.enabled {
-                continue;
-            }
-            let Some(default_limit) = self.default_concurrency_limit().await else {
-                continue;
-            };
-            let effective = record.concurrency_limit.map_or(
-                default_limit.into_non_zero().get(),
-                AccountConcurrencyLimit::get,
-            );
-            if target >= effective {
-                continue;
-            }
             let Some(limit) = AccountConcurrencyLimit::new(target) else {
                 continue;
-            };
-            let command = UpdateAccount {
-                account_id: account_id.clone(),
-                notes: None,
-                enabled: record.enabled,
-                concurrency_limit: Some(limit),
-                weight: record.weight,
-                model_access: None,
-                group_ids: record.groups.iter().map(|group| group.id.clone()).collect(),
-                outbound_proxy: None,
             };
             match self
                 .deps
                 .accounts
-                .update(&Self::system_context(), command)
+                .lower_concurrency_limit(&Self::system_context(), account, limit)
                 .await
             {
-                Ok(_) => {
+                Ok(Some(_)) => {
                     tracing::info!(
                         account_id,
-                        previous_limit = effective,
                         adapted_limit = target,
                         freeze_seconds = policy.freeze_duration().as_secs(),
                         "容量熔断：按观测在途峰值下调账号并发上限",
                     );
                 }
+                Ok(None) => {}
                 Err(error) => {
                     warn!(account_id, error = %error, "自适应并发下调失败");
                 }
             }
         }
-    }
-
-    async fn default_concurrency_limit(&self) -> Option<AccountConcurrencyLimit> {
-        let settings = self.deps.settings.load_runtime_settings().await.ok()?;
-        AccountConcurrencyLimit::new(settings.max_concurrent_per_account)
     }
 
     async fn load_account(&self, account_id: &str) -> Option<Option<AccountPageItem>> {
@@ -181,33 +146,38 @@ impl FreezeRecoveryTask {
             .ok()
     }
 
-    /// 对冻结即将到期（或已到期但冷却 key 仍在缓冲期内）的账号执行一次真实
-    /// 探测：成功立即解冻，失败顺延一个冻结周期。
+    /// 到达探测时间后才恢复；关闭自动冻结或探测时，已有冻结仍等待原冷却结束。
     async fn recover_due_freezes(
         &self,
-        freezes: &BTreeMap<String, DateTime<Utc>>,
+        freezes: &BTreeMap<String, AccountFreeze>,
         policy: &gateway_core::provider_ports::ProviderFreezePolicy,
     ) {
-        let probe_deadline = SystemTime::now() + PROBE_LEAD_TIME;
-        let due = freezes
-            .iter()
-            .filter(|(_, until)| SystemTime::from(**until) <= probe_deadline)
-            .map(|(account_id, _)| account_id.clone())
-            .collect::<Vec<_>>();
-        for account_id in due {
-            self.probe_and_recover(&account_id, policy).await;
+        for (account_id, freeze) in freezes {
+            if freeze.until > Utc::now() {
+                continue;
+            }
+            if policy.enabled() && policy.probe_enabled() && freeze.requires_probe {
+                self.probe_and_recover(account_id, freeze, policy).await;
+            } else if let Err(error) = self
+                .deps
+                .runtime
+                .finish_freeze(account_id, freeze, None)
+                .await
+            {
+                warn!(account_id, error = %error, "解除到期冻结失败");
+            }
         }
     }
 
     async fn probe_and_recover(
         &self,
         account_id: &str,
+        freeze: &AccountFreeze,
         policy: &gateway_core::provider_ports::ProviderFreezePolicy,
     ) {
         let Some(Some(item)) = self.load_account(account_id).await else {
             return;
         };
-        let revision = item.account.credential_revision;
         if !item.account.enabled {
             // 停用账号没有自动恢复意义；解冻交给管理员手动恢复。
             return;
@@ -217,7 +187,7 @@ impl FreezeRecoveryTask {
         };
         let Some(model) = self.resolve_probe_model(&account, policy).await else {
             // 没有可用探测模型时按失败处理，顺延冻结等待下一轮。
-            self.postpone(&account, revision, policy).await;
+            self.postpone(&account, freeze, policy).await;
             return;
         };
         let probe_succeeded = match self
@@ -233,27 +203,26 @@ impl FreezeRecoveryTask {
             }
         };
         if probe_succeeded {
-            if let Err(error) = self
+            match self
                 .deps
                 .runtime
-                .clear_rate_limit(account_id, revision)
+                .finish_freeze(account_id, freeze, None)
                 .await
             {
-                warn!(account_id, error = %error, "解除冻结失败");
-                return;
+                Ok(true) => tracing::info!(account_id, "冻结恢复探测成功：账号已解冻"),
+                Ok(false) => {}
+                Err(error) => warn!(account_id, error = %error, "解除冻结失败"),
             }
-            tracing::info!(account_id, "冻结恢复探测成功：账号已解冻");
         } else {
-            self.postpone(&account, revision, policy).await;
+            self.postpone(&account, freeze, policy).await;
         }
     }
 
-    /// 探测失败：把冻结顺延一个冻结周期。revision 防腐保证管理员停用或
-    /// 其他并发修改后，过期写入不会生效。
+    /// 探测失败只顺延本次仍存在的冻结，旧探测不能重新冻结已手动恢复的账号。
     async fn postpone(
         &self,
         account: &ProviderAccountId,
-        revision: crate::model::Revision,
+        freeze: &AccountFreeze,
         policy: &gateway_core::provider_ports::ProviderFreezePolicy,
     ) {
         let Some(until) = SystemTime::now().checked_add(policy.freeze_duration()) else {
@@ -263,16 +232,17 @@ impl FreezeRecoveryTask {
         match self
             .deps
             .runtime
-            .extend_rate_limit(account.as_str(), revision, until)
+            .finish_freeze(account.as_str(), freeze, Some(until))
             .await
         {
-            Ok(_) => {
+            Ok(true) => {
                 tracing::info!(
                     account_id = account.as_str(),
                     postpone_seconds = policy.freeze_duration().as_secs(),
                     "冻结恢复探测失败：账号冻结顺延",
                 );
             }
+            Ok(false) => {}
             Err(error) => {
                 warn!(
                     account_id = account.as_str(),

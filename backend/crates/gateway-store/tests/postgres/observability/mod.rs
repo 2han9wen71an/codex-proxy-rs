@@ -865,9 +865,10 @@ impl ProviderCooldownPort for StaticCooldowns {
         Box::pin(async { Ok(0) })
     }
 
-    fn clear_capacity_failures<'a>(
+    fn clear_after_success<'a>(
         &'a self,
         _account_id: &'a ProviderAccountId,
+        _through_revision: gateway_core::account::CredentialRevision,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async { Ok(()) })
     }

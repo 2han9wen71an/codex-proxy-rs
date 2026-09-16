@@ -228,6 +228,31 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
     leases: Arc<TestLeaseCoordinator>,
     stream_max_retries: u32,
 ) -> (CodexProvider, Arc<CodexCredentialQuotaService>) {
+    let (provider, quota, _) = provider_and_quota_with_runtime_ports(
+        store,
+        session_affinity,
+        base_url,
+        leases,
+        stream_max_retries,
+        Arc::new(MemoryCooldownPort::new()),
+        crate::support::runtime_policy(),
+    );
+    (provider, quota)
+}
+
+fn provider_and_quota_with_runtime_ports(
+    store: &Arc<MemoryAccountStore>,
+    session_affinity: Arc<MemorySessionAffinity>,
+    base_url: String,
+    leases: Arc<TestLeaseCoordinator>,
+    stream_max_retries: u32,
+    cooldowns: Arc<MemoryCooldownPort>,
+    policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
+) -> (
+    CodexProvider,
+    Arc<CodexCredentialQuotaService>,
+    Arc<CodexWebSocketPool>,
+) {
     let profile = wire_profile();
     let http = reqwest::Client::builder()
         .no_proxy()
@@ -246,9 +271,9 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         profile.clone(),
         http.clone(),
         base_url.clone(),
-        Arc::new(MemoryCooldownPort::new()),
+        cooldowns,
         Arc::clone(&leases) as Arc<dyn ProviderLeasePort>,
-        crate::support::runtime_policy(),
+        policy,
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
     let selector = Arc::new(CodexCredentialSelector::new(
@@ -271,11 +296,11 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         http,
         profile,
         base_url,
-        websocket_pool,
+        Arc::clone(&websocket_pool),
         stream_max_retries,
     )
     .expect("official OpenAI provider");
-    (provider, quota)
+    (provider, quota, websocket_pool)
 }
 
 async fn create_account(store: &Arc<MemoryAccountStore>, id: &str) {
@@ -5464,7 +5489,11 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
             create_account(&store, account_id).await;
             let server = MockServer::start().await;
             let body = json!({"error": {
-                "code": if status == 503 { Some("server_is_overloaded") } else { None },
+                "code": match status {
+                    429 => Some("slow_down"),
+                    503 => Some("server_is_overloaded"),
+                    _ => None,
+                },
                 "type": "server_error",
                 "message": "Selected model is at capacity. Please try a different model.",
                 "extension": {"preserved": true}
@@ -5506,7 +5535,7 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
                 max_retries, initial_delay, max_delay,
             }) if max_retries.get() == 3 && initial_delay == Duration::from_secs(8) && max_delay == Duration::from_secs(8))
             );
-            assert!(!provider_openai::openai_failure_affects_account_score(
+            assert!(provider_openai::openai_failure_affects_account_score(
                 &error
             ));
             assert_eq!(
@@ -5526,6 +5555,164 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
             assert_eq!(account.credential_state(), CredentialState::Ready);
         }
     }
+}
+
+fn provider_with_capacity_tracking(
+    store: &Arc<MemoryAccountStore>,
+    base_url: String,
+    cooldowns: Arc<MemoryCooldownPort>,
+) -> (CodexProvider, Arc<CodexWebSocketPool>) {
+    let (provider, _, pool) = provider_and_quota_with_runtime_ports(
+        store,
+        Arc::new(MemorySessionAffinity::default()),
+        base_url,
+        Arc::new(TestLeaseCoordinator::default()),
+        0,
+        cooldowns,
+        crate::support::StaticFreezePolicy::policy_port(
+            gateway_core::provider_ports::ProviderFreezePolicy::try_new(
+                true, 12, 600, 7_200, true, None, true,
+            )
+            .expect("freeze policy"),
+        ),
+    );
+    (provider, pool)
+}
+
+#[tokio::test]
+async fn capacity_feedback_counts_business_rejections_but_excludes_diagnostic_probes() {
+    use gateway_core::provider_ports::ProviderCooldownPort as _;
+
+    for websocket in [false, true] {
+        for (status, code) in [
+            (429, "slow_down"),
+            (503, "server_is_overloaded"),
+            (500, "server_error"),
+        ] {
+            for diagnostic in [false, true] {
+                let store = Arc::new(MemoryAccountStore::default());
+                let account_id = "acct_provider_contract";
+                create_account(&store, account_id).await;
+                let account = store.account(account_id).expect("account");
+                let cooldowns = Arc::new(MemoryCooldownPort::new());
+                let server = MockServer::start().await;
+                Mock::given(method(if websocket { "GET" } else { "POST" }))
+                    .and(path("/codex/responses"))
+                    .respond_with(
+                        ResponseTemplate::new(status).set_body_json(json!({"error": {
+                            "code": code,
+                            "message": "Upstream temporarily unavailable"
+                        }})),
+                    )
+                    .expect(2)
+                    .mount(&server)
+                    .await;
+                let (provider, _) =
+                    provider_with_capacity_tracking(&store, server.uri(), Arc::clone(&cooldowns));
+                // 同时验证窗口证据已过期与尚未过期：探测不能重建峰值，也不能改写原计数。
+                for existing_evidence in [None, Some((4, 20))] {
+                    if let Some((count, peak)) = existing_evidence {
+                        for _ in 0..count {
+                            cooldowns
+                                .record_capacity_failure(
+                                    account.id(),
+                                    Duration::from_secs(600),
+                                    peak,
+                                )
+                                .await
+                                .expect("seed normal-request evidence");
+                        }
+                    }
+                    let before = cooldowns.capacity_evidence(account.id());
+                    let attempt = if diagnostic {
+                        diagnostic_context("req_capacity_feedback_probe", account_id)
+                    } else {
+                        context("req_capacity_feedback_business", CancellationToken::new())
+                    };
+                    let operation = if websocket {
+                        generate_operation()
+                    } else {
+                        http_generate_operation()
+                    };
+                    let mut stream = provider
+                        .execute(planned_request("openai", operation), attempt)
+                        .await
+                        .expect("prepare upstream attempt");
+                    let error = loop {
+                        match stream.next().await {
+                            Some(Ok(_)) => {}
+                            Some(Err(error)) => break error,
+                            None => panic!("expected upstream rejection"),
+                        }
+                    };
+                    assert_eq!(error.upstream_status(), Some(status));
+                    let after = cooldowns.capacity_evidence(account.id());
+                    if diagnostic {
+                        assert_eq!(after, before, "probe must preserve capacity count and peak");
+                    } else {
+                        assert_eq!(
+                            after.map(|(count, _)| count),
+                            Some(before.map_or(1, |(count, _)| count + 1))
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn local_websocket_connection_cancellation_does_not_supply_capacity_evidence() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_provider_contract";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("account");
+    let cooldowns = Arc::new(MemoryCooldownPort::new());
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let base_url = format!("http://{}", listener.local_addr().expect("address"));
+    let (provider, pool) =
+        provider_with_capacity_tracking(&store, base_url, Arc::clone(&cooldowns));
+    let operation = Operation::Generate(generate_with_persisted_session_context(
+        account_id,
+        "conversation_capacity_local",
+        "session_capacity_local",
+        "turn_capacity_local",
+    ));
+    let mut stream = provider
+        .execute(
+            planned_request("openai", operation),
+            context("req_capacity_local", CancellationToken::new()),
+        )
+        .await
+        .expect("prepare WebSocket attempt");
+    let attempt = tokio::spawn(async move {
+        loop {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break error,
+                None => panic!("cancelled opening must fail"),
+            }
+        }
+    });
+    let (mut opening, _) = timeout(Duration::from_secs(5), listener.accept())
+        .await
+        .expect("opening deadline")
+        .expect("opening");
+    read_http_request(&mut opening).await;
+    // 复现账号更新驱逐正在建连的连接，未收到任何上游容量拒绝。
+    pool.evict_account(account_id).await;
+    let error = timeout(Duration::from_secs(5), attempt)
+        .await
+        .expect("cancelled attempt deadline")
+        .expect("attempt task");
+    assert_eq!(error.kind(), ProviderErrorKind::Unavailable);
+    assert_eq!(error.send_state(), UpstreamSendState::NotSent);
+    assert_eq!(
+        error.diagnostic().and_then(|diagnostic| diagnostic.code()),
+        Some("shared_connect_failed")
+    );
+    assert_eq!(cooldowns.capacity_evidence(account.id()), None);
+    pool.shutdown().await;
 }
 
 #[tokio::test]
@@ -5566,7 +5753,12 @@ async fn websocket_usage_limit_rejection_preserves_quota_state_for_account_rotat
 
 #[tokio::test]
 async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_transports() {
-    for use_websocket in [false, true] {
+    for (use_websocket, code) in [
+        (false, "server_is_overloaded"),
+        (true, "server_is_overloaded"),
+        (false, "slow_down"),
+        (true, "slow_down"),
+    ] {
         for semantic_output in [false, true] {
             let store = Arc::new(MemoryAccountStore::default());
             create_account(&store, "acct_provider_contract").await;
@@ -5576,7 +5768,7 @@ async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_t
             if semantic_output {
                 events.push(json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello"}));
             }
-            let original = json!({"type": "response.failed", "response": {"id": "resp_capacity", "error": {"code": "server_is_overloaded", "message": "Selected model is at capacity. Please try a different model."}}});
+            let original = json!({"type": "response.failed", "response": {"id": "resp_capacity", "error": {"code": code, "message": "Selected model is at capacity. Please try a different model."}}});
             events.push(original.clone());
             let (base_url, _http_server, websocket_server) = if use_websocket {
                 let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
@@ -5641,7 +5833,7 @@ async fn capacity_stream_rejection_only_retries_before_semantic_output_on_both_t
             assert_eq!(error.replay_is_safe(), !semantic_output);
             assert_eq!(error.kind(), ProviderErrorKind::UpstreamCapacityUnavailable);
             assert_eq!(error.pre_delivery_retry().is_some(), !semantic_output);
-            assert!(!provider_openai::openai_failure_affects_account_score(
+            assert!(provider_openai::openai_failure_affects_account_score(
                 &error
             ));
             assert_eq!(

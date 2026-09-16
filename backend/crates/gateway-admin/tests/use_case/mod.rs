@@ -490,6 +490,15 @@ impl AccountStore for UnavailableStore {
         Err(unavailable("account enabled"))
     }
 
+    async fn lower_concurrency_limit(
+        &self,
+        _: &gateway_core::account::ProviderAccountId,
+        _: gateway_core::account::AccountConcurrencyLimit,
+        _: &MutationContext,
+    ) -> AdminStoreResult<Option<gateway_admin::model::accounts::AccountUpdateResult>> {
+        Ok(None)
+    }
+
     async fn recover_account(
         &self,
         _: &ProviderAccountId,
@@ -533,7 +542,9 @@ impl AccountRuntimeStore for UnavailableStore {
         Ok(AccountRuntimeSnapshot::default())
     }
 
-    async fn active_freezes(&self) -> AdminStoreResult<BTreeMap<String, DateTime<Utc>>> {
+    async fn active_freezes(
+        &self,
+    ) -> AdminStoreResult<BTreeMap<String, gateway_admin::model::accounts::AccountFreeze>> {
         Ok(BTreeMap::new())
     }
 
@@ -544,19 +555,11 @@ impl AccountRuntimeStore for UnavailableStore {
         Ok(BTreeMap::new())
     }
 
-    async fn clear_rate_limit(
+    async fn finish_freeze(
         &self,
         _account_id: &str,
-        _through_revision: Revision,
-    ) -> AdminStoreResult<bool> {
-        Ok(false)
-    }
-
-    async fn extend_rate_limit(
-        &self,
-        _account_id: &str,
-        _through_revision: Revision,
-        _until: DateTime<Utc>,
+        _expected: &gateway_admin::model::accounts::AccountFreeze,
+        _postpone_until: Option<DateTime<Utc>>,
     ) -> AdminStoreResult<bool> {
         Ok(false)
     }

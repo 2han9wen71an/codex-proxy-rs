@@ -269,3 +269,52 @@ async fn concurrency_queue_settings_round_trip_into_the_runtime_snapshot() {
     assert!(snapshot.config_revision > before.config_revision);
     database.close().await;
 }
+
+#[tokio::test]
+async fn auto_freeze_defaults_off_and_migration_preserves_explicit_opt_in() {
+    let Some(database) = TestDatabase::create("freeze_opt_in").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    assert!(
+        !repository
+            .load_runtime_settings()
+            .await
+            .expect("default settings")
+            .account_auto_freeze_enabled
+    );
+    sqlx::query("update runtime_settings set account_auto_freeze_enabled = true where id = 1")
+        .execute(&database.pool)
+        .await
+        .expect("old default");
+    let migration = include_str!("../../../../migrations/0011_account_auto_freeze_opt_in.sql");
+    sqlx::raw_sql(migration)
+        .execute(&database.pool)
+        .await
+        .expect("migrate untouched default");
+    assert!(
+        !repository
+            .load_runtime_settings()
+            .await
+            .expect("settings")
+            .account_auto_freeze_enabled
+    );
+    sqlx::query("update runtime_settings set account_auto_freeze_enabled = true where id = 1")
+        .execute(&database.pool)
+        .await
+        .expect("explicit opt-in");
+    sqlx::query("insert into admin_audit_events (id, actor_kind, actor_ref, action, entity_kind, entity_ref, changed_fields, created_at) values ('freeze-opt-in', 'system', 'test', 'settings.replace', 'runtime_settings', '1', array['account_auto_freeze'], now())")
+        .execute(&database.pool).await.expect("saved settings audit");
+    sqlx::raw_sql(migration)
+        .execute(&database.pool)
+        .await
+        .expect("preserve opt-in");
+    assert!(
+        repository
+            .load_runtime_settings()
+            .await
+            .expect("settings")
+            .account_auto_freeze_enabled
+    );
+    database.close().await;
+}
