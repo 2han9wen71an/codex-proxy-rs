@@ -32,6 +32,7 @@ use gateway_core::operation::{
     OperationKind, ProtocolPayload, ProviderSessionState, RawJsonPayload, StandaloneSearchRequest,
 };
 use gateway_core::policy::ClientApiKeyId;
+use gateway_core::provider_ports::ProviderLeasePort;
 use gateway_core::routing::{
     ClientRoutingScope, ConfigRevision, FrozenAccountScope, ModelCapabilities, ModelServiceTier,
     ProviderKind, ProviderModel, PublicModelId, RoutingContext, RuntimeAccount,
@@ -246,6 +247,8 @@ fn provider_and_quota_with_affinity_and_base_url_and_leases(
         http.clone(),
         base_url.clone(),
         Arc::new(MemoryCooldownPort::new()),
+        Arc::clone(&leases) as Arc<dyn ProviderLeasePort>,
+        crate::support::runtime_policy(),
     ));
     let account_feedback = Arc::new(AccountFeedbackStats::default());
     let selector = Arc::new(CodexCredentialSelector::new(

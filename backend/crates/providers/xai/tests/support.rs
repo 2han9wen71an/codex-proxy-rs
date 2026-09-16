@@ -972,6 +972,29 @@ impl ProviderCooldownPort for MemoryCooldownPort {
             Ok(account_removed || scoped_removed)
         })
     }
+
+    fn record_capacity_failure<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+        _window: Duration,
+        _in_flight: u32,
+    ) -> futures::future::BoxFuture<'a, Result<u32, ProviderStoreError>> {
+        Box::pin(async { Ok(0) })
+    }
+
+    fn clear_capacity_failures<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn capacity_peak_in_flight<'a>(
+        &'a self,
+        _account_id: &'a ProviderAccountId,
+    ) -> futures::future::BoxFuture<'a, Result<Option<u32>, ProviderStoreError>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 impl ProviderRuntimePolicyPort for StaticRuntimePolicy {

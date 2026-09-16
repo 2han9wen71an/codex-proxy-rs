@@ -410,6 +410,26 @@ pub(super) async fn apply_failure(
             "Failed to persist OpenAI response cookies"
         );
     }
+    record_capacity_signal(context.quota, account, failure).await;
+}
+
+/// 容量类上游错误（过载/慢速/5xx 不可用）按 attempt 计入容量熔断计数。
+/// 这些错误不证明账号凭据或配额有问题，因此不进入 `account_failure`；
+/// 但高频出现意味着该账号的上游链路暂时不可用，由熔断策略冻结调度。
+async fn record_capacity_signal(
+    quota: &Arc<CodexCredentialQuotaService>,
+    account: &ProviderAccount,
+    failure: &MappedProviderFailure,
+) {
+    if !matches!(
+        failure.error.kind(),
+        ProviderErrorKind::UpstreamCapacityUnavailable | ProviderErrorKind::Unavailable
+    ) {
+        return;
+    }
+    quota
+        .apply_capacity_failure(account, SystemTime::now())
+        .await;
 }
 
 pub(super) fn schedule_authoritative_quota_refresh_after_failure(
