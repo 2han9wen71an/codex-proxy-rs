@@ -37,7 +37,6 @@ mod session_cookie;
 
 /// API-owned HTTP 与静态资源配置。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ApiConfig {
     pub asset_directory: PathBuf,
     pub cors_allowed_origins: Vec<String>,

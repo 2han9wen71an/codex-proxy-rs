@@ -50,7 +50,7 @@ type OperationError = SystemOperationError;
 
 /// 系统更新与重启配置；所有字段只由 Host 解释。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SystemUpdateConfig {
     pub version: String,
     pub git_sha: String,

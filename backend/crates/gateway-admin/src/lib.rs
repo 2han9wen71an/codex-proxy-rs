@@ -97,7 +97,6 @@ impl fmt::Debug for InitialAdminPassword {
 
 /// 管理控制面的启动配置。
 #[derive(Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     pub session_ttl_minutes: u64,
     pub default_username: String,
@@ -106,7 +105,6 @@ pub struct AdminConfig {
 
 /// Client 登录域的通用启动配置。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ClientConfig {
     pub session_ttl_minutes: u64,
 }
