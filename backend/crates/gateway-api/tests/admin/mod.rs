@@ -417,6 +417,13 @@ impl SettingsStore for MemorySettingsStore {
             usage_retention_days: command.usage_retention_days,
             ops_event_retention_days: command.ops_event_retention_days,
             audit_retention_days: command.audit_retention_days,
+            account_auto_freeze_enabled: true,
+            account_auto_freeze_threshold: 12,
+            account_auto_freeze_window_seconds: 600,
+            account_auto_freeze_duration_seconds: 7_200,
+            account_auto_freeze_probe_enabled: true,
+            account_auto_freeze_probe_model: None,
+            account_auto_freeze_adaptive_concurrency: true,
             updated_at: Utc::now(),
         };
         *settings = updated.clone();
@@ -944,6 +951,34 @@ impl AccountRuntimeStore for UnusedStore {
             in_flight: Some(BTreeMap::new()),
         })
     }
+
+    async fn active_freezes(&self) -> AdminStoreResult<BTreeMap<String, DateTime<Utc>>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn capacity_peaks(
+        &self,
+        _account_ids: &[String],
+    ) -> AdminStoreResult<BTreeMap<String, u32>> {
+        Ok(BTreeMap::new())
+    }
+
+    async fn clear_rate_limit(
+        &self,
+        _account_id: &str,
+        _through_revision: Revision,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
+
+    async fn extend_rate_limit(
+        &self,
+        _account_id: &str,
+        _through_revision: Revision,
+        _until: DateTime<Utc>,
+    ) -> AdminStoreResult<bool> {
+        Ok(false)
+    }
 }
 
 #[async_trait]
@@ -1245,6 +1280,13 @@ fn test_runtime_settings() -> RuntimeSettings {
         usage_retention_days: 31,
         ops_event_retention_days: 30,
         audit_retention_days: 90,
+        account_auto_freeze_enabled: true,
+        account_auto_freeze_threshold: 12,
+        account_auto_freeze_window_seconds: 600,
+        account_auto_freeze_duration_seconds: 7_200,
+        account_auto_freeze_probe_enabled: true,
+        account_auto_freeze_probe_model: None,
+        account_auto_freeze_adaptive_concurrency: true,
         updated_at: Utc::now(),
     }
 }

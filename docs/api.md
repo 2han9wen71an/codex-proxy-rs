@@ -892,6 +892,13 @@ minCodexCliVersion
 usageRetentionDays
 opsEventRetentionDays
 auditRetentionDays
+accountAutoFreezeEnabled
+accountAutoFreezeThreshold
+accountAutoFreezeWindowSeconds
+accountAutoFreezeDurationSeconds
+accountAutoFreezeProbeEnabled
+accountAutoFreezeProbeModel
+accountAutoFreezeAdaptiveConcurrency
 ```
 
 `maxWaitingPerKey` 与 `maxWaitingPerAccount` 是全局统一的排队容量，取值 0～1,000，默认 0（关闭）；
@@ -903,6 +910,15 @@ auditRetentionDays
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段。
+
+账号自动冻结（`accountAutoFreeze*`）在统计窗口内按尝试累计容量类上游错误（`server_is_overloaded`
+等与 5xx 不可用），达到阈值后把该账号冻结为带恢复倒计时的 `rate_limited` 状态。`accountAutoFreezeThreshold`
+取值 2～1,000（默认 12，按 attempt 计数，含请求内同账号重试）；`accountAutoFreezeWindowSeconds`
+取值 60～3,600（默认 600，随每次失败滑动顺延）；`accountAutoFreezeDurationSeconds` 取值 300～604,800
+（默认 7,200，即 2 小时，探测失败后按该时长顺延）。`accountAutoFreezeProbeEnabled` 开启时恢复 worker
+在到期前执行一次真实探测调用，成功才解冻；`accountAutoFreezeProbeModel` 为 `string | null`，留空时自动
+选择账号可用的第一个模型。`accountAutoFreezeAdaptiveConcurrency` 开启时冻结期间把账号并发上限下调到
+观测在途峰值的 80%（下限 2，只降不升，管理员可手动改回）。
 
 Windows 离线包接口固定解析 Microsoft Store Product ID `9PLM9XGG6VKS` 的 Retail 包，不接受调用方提供
 产品 ID、上游地址、ring 或文件名。后端只返回通过包名、架构、Microsoft CDN host/path、scheme 和失效
