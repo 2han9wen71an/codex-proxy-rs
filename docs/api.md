@@ -169,6 +169,24 @@ Responses 不透传下游的逐跳头、反代元数据（如 `cf-*`、`x-forwar
 API Key 上游还会移除 Cookie、ChatGPT 账号身份、`x-codex-*`、`x-openai-internal-*`、会话/线程身份头及
 `X-OpenAI-Actor-Authorization`，避免把 OAuth 或网关托管身份传给第三方 API。
 
+Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和 `sec-fetch-*`
+携带的下游 SDK/浏览器环境或页面来源。兼容基准是 Codex Core/Desktop 请求协议；
+OpenAI 官方 SDK 也会发送 `x-stainless-*`，浏览器字段也有标准定义，过滤不表示这些头非法。
+规则不依赖下游 User-Agent，也不改变原始入站请求供 CORS、鉴权和本地观测使用的字段。
+`session_id` 请求头仅作为入站会话别名，提取后不再原样透传，上游通过 `session-id` 表达；
+两者同时存在时仍优先使用 `session-id`。正文中的 `client_metadata.session_id`、
+`prompt_cache_key` 不受这条请求头规则影响。
+`thread-id`、turn metadata 等 Codex 协议字段及未知业务扩展继续按既有合同处理；
+`traceparent`、`tracestate` 不因属于追踪字段而被删除。
+
+Responses 上游编码会移除 Codex 不接受的顶层 `temperature`、`max_output_tokens` 和
+`prompt_cache_retention`；这些参数可能来自 Pi 等客户端的普通 OpenAI Responses 适配。
+`prompt_cache_key`、`reasoning`、`include` 等 Codex 参数继续保留。过滤只作用于顶层，
+不删除工具参数 schema、输入内容或 `client_metadata` 内的同名业务字段；其他未知字段继续透传。
+
+这不是客户端匿名化：系统提示词、工具定义、工具结果、工作目录及其他业务 metadata 仍可能
+透露客户端环境，网关不对正文做客户端品牌清洗。
+
 Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行。当前响应期间收到的后续业务帧
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
 接收队列容量为 32 个事件，超载仍关闭连接；Ping/Pong、客户端关闭和服务关闭不等待队列中的请求执行。
