@@ -157,7 +157,7 @@ Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-open
 `deflate`（zlib 封装）和 `zstd`，缺省、空值或 `identity` 直接使用原始正文。gzip 多成员与 zstd
 多帧连续解码，整体展开结果最多 64 MiB，超限在继续展开前返回 `400 request_too_large`；zstd
 回溯窗口同样最多 64 MiB，不能满足该限制的帧按解码失败处理。这个限制保护入站解压资源，不是
-模型上下文或 Token 上限，也不新增未压缩正文的长度限制。
+模型上下文或 Token 上限；未压缩正文不受此长度限制。
 不支持的编码、逗号分隔的叠加编码和重复 `Content-Encoding` 头返回
 `400 unsupported_content_encoding`；压缩正文损坏、截断或解压后不是合法 JSON 返回
 `400 invalid_json`。本地错误不包含原始正文或解压库细节。WebSocket 文本帧不经过这条解压路径。
@@ -170,22 +170,21 @@ API Key 上游还会移除 Cookie、ChatGPT 账号身份、`x-codex-*`、`x-open
 `X-OpenAI-Actor-Authorization`，避免把 OAuth 或网关托管身份传给第三方 API。
 
 Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和 `sec-fetch-*`
-携带的下游 SDK/浏览器环境或页面来源。兼容基准是 Codex Core/Desktop 请求协议；
-OpenAI 官方 SDK 也会发送 `x-stainless-*`，浏览器字段也有标准定义，过滤不表示这些头非法。
-规则不依赖下游 User-Agent，也不改变原始入站请求供 CORS、鉴权和本地观测使用的字段。
-`session_id` 请求头仅作为入站会话别名，提取后不再原样透传，上游通过 `session-id` 表达；
+携带的下游 SDK/浏览器环境或页面来源。过滤规则适用于所有下游客户端，与 User-Agent 无关；
+原始入站头仍供 CORS、鉴权和本地观测使用。
+`session_id` 请求头仅作为入站会话别名，上游通过 `session-id` 表达；
 两者同时存在时仍优先使用 `session-id`。正文中的 `client_metadata.session_id`、
 `prompt_cache_key` 不受这条请求头规则影响。
-`thread-id`、turn metadata 等 Codex 协议字段及未知业务扩展继续按既有合同处理；
+`thread-id`、turn metadata 等 Codex 协议字段及未知业务扩展不受下游环境头过滤规则影响；
 `traceparent`、`tracestate` 不因属于追踪字段而被删除。
 
 Responses 上游编码会移除 Codex 不接受的顶层 `temperature`、`max_output_tokens` 和
-`prompt_cache_retention`；这些参数可能来自 Pi 等客户端的普通 OpenAI Responses 适配。
+`prompt_cache_retention`。
 `prompt_cache_key`、`reasoning`、`include` 等 Codex 参数继续保留。过滤只作用于顶层，
 不删除工具参数 schema、输入内容或 `client_metadata` 内的同名业务字段；其他未知字段继续透传。
 
-这不是客户端匿名化：系统提示词、工具定义、工具结果、工作目录及其他业务 metadata 仍可能
-透露客户端环境，网关不对正文做客户端品牌清洗。
+请求头过滤不提供客户端匿名化；系统提示词、工具定义、工具结果、工作目录及其他业务 metadata
+保持原有语义，可能包含客户端环境信息。
 
 Responses WebSocket 仅接受文本 `response.create`，同一连接串行执行。当前响应期间收到的后续业务帧
 留在有界接收队列中，待当前响应完成终结和写出后再逐条校验、准入与执行，不因请求提前到达而断开。
@@ -196,7 +195,7 @@ OAuth 账号在客户端使用 HTTP/SSE 时仍可能选择上游 WebSocket。API
 客户端配置的 `supports_websockets` 只控制第一段连接，不是服务端传输策略开关。
 上游在响应终态前发送 Close 1000 仍属于失败，不能按“正常关闭”计为成功。
 
-已建立模型执行的 Responses、Images 和 Search HTTP 响应使用现有 ID：
+已建立模型执行的 Responses、Images 和 Search HTTP 响应按以下规则返回关联 ID：
 `x-gateway-request-id` 为模型执行 ID；`x-request-id` 保留有效上游值，只有上游
 `x-oai-request-id` 时复用其值，没有上游 ID 时使用模型执行 ID。`x-oai-request-id` 不是必需字段，
 也不要求客户端识别它；OpenAI 与 xAI 路由使用相同规则。失败响应的关联 ID 不采用会话 opening ID，
@@ -253,12 +252,12 @@ Responses wire 之间的协议转换层，转换只在 xAI Provider 内完成。
 OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足错误时，代理在允许安全重放且
 尚未交付输出的前提下，先做最多 3 次同账号指数退避，再通过现有调度换号。默认间隔从 500ms 开始，
 上游 `Retry-After` 参与退避计算，单次等待不超过 8 秒；重试同时受请求总尝试次数和截止时间约束。
-`server_is_overloaded`、`slow_down` 与既有可计分的结构化错误按已发送的失败尝试计入 Smart 账号
-健康分；容量分类不再豁免计分。失败率沿用账号级平滑与时间衰减，影响后续普通选路，已有可用账号的
+`server_is_overloaded`、`slow_down` 等可计分的结构化错误按已发送的失败尝试计入 Smart 账号
+健康分。失败率使用账号级平滑与时间衰减，影响后续普通选路，已有可用账号的
 会话亲和仍优先。容量不足不触发 Provider 全局熔断，也不作为账号额度耗尽；启用账号自动冻结时，
 达到容量失败阈值会另外写入临时冷却。
 最终交付的上游错误仍按上述透明边界保留原始状态码、错误码和正文。
-明确额度耗尽继续走现有账号隔离与安全换号流程，
+明确额度耗尽触发账号隔离与安全换号，
 包括 WebSocket 握手返回的 429；不会因其长 `Retry-After` 而转入同账号传输恢复等待。
 
 ## 4. 浏览器认证
@@ -280,14 +279,12 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 未登录时为 `{ authenticated: false, session: null }`。`role` 由服务端已验证身份推导，不接受客户端声明。
 不返回凭据或绑定 ID。
 
-Redis 统一保存身份（管理员 ID 或 Client Key ID）和绝对有效期，不保存密码或原始 Key。
-使用 `auth:v1` 命名空间，Cookie 属性为 `Path=/; HttpOnly; SameSite=Lax`，`Max-Age` /
+会话由服务端保存，Cookie 属性为 `Path=/; HttpOnly; SameSite=Lax`，`Max-Age` /
 `Expires` 对齐固定有效期，`Secure` 沿用上述 Origin 规则。轮询不会续期。
 管理员有效期由 `admin.session_ttl_minutes` 控制；密钥有效期由 `client.session_ttl_minutes` 控制，默认 1440 分钟。
 
 每次恢复密钥会话时重新确认 Key 存在且启用；停用或删除后会话失效，重新启用不会恢复已撤销会话。
 依赖不可用时返回 503，不返回已认证或假装未登录。预算耗尽不妨碍登录。
-原有管理员认证路由和 Cookie 不再接受，升级后需要重新登录。
 
 密钥会话访问管理接口返回 403，不清除仍然有效的会话。
 浏览器会话不能替代 `/v1/*` 的 Bearer Key，数据面 Key 也不能替代浏览器会话。
@@ -502,8 +499,8 @@ OAuth 等待回调期间不持有保护；提交仍拒绝已删除、连接配�
 管理端通过后台任务导入账号，关闭页面不会取消执行。`submissionId` 为客户端生成的 UUID；同一管理员在任务记录
 保留期间使用相同标识和相同输入重新提交，会返回已有任务，内容改变则返回 409。修改输入须使用新标识。
 
-每个任务接受 1–200 个 `items`，请求体上限为 4 MiB。每个条目沿用下节的 Provider 文档与设置合同，独立调用
-凭据准备、校验、事务提交与快照发布流程。批量 AT / RT 由前端按非空输入顺序拆成单账号条目，因此可逐条统计；
+每个任务接受 1–200 个 `items`，请求体上限为 4 MiB。每个条目遵循下节的 Provider 文档与设置合同，独立处理
+并返回结果。批量 AT / RT 按非空输入顺序拆成单账号条目，因此可逐条统计；
 JSON 文件按 Provider 文档分项，不拆解内部代理引用或改变 Provider 对文档的原子性与部分成功语义。
 一个文档可导入多个账号，条目成功数与入库账号数可能不同。
 
@@ -513,10 +510,10 @@ JSON 文件按 Provider 文档分项，不拆解内部代理引用或改变 Prov
 列表返回 `{ items: [摘要] }`。结果未知时保留 `unknown`，先核对账号目录再决定是否重新导入；服务端不自动重试凭据交换。
 停止请求可重复调用，已结束的任务保持原结果；未知、已过期或其他管理员的任务 ID 返回 404。
 
-任务仅保存在单实例进程内，不新增数据库表，也不使用 Redis 保存任务。所有后台导入共享 3 个执行槽位；
+所有后台导入共享 3 个执行槽位；
 最多接受 8 个未结束任务、保留 100 个任务，达到上限返回 429。成功、失败或跳过后立即释放对应输入，
 终态结果保留 1 小时后自动清理。服务重启会丢失任务与未执行输入，已提交的账号不受影响；
-重新打开页面从服务端恢复当前管理员的任务列表，前端不持久化任务 ID 或凭据。
+任务记录仍在保留期内时，可通过列表接口查询当前管理员的任务及进度。
 
 ### 账号导入与 OAuth
 
@@ -1144,10 +1141,10 @@ OpenAI Responses 用量记录的 `serviceTier` 与本地费用估算统一采用
 计算，托管工具调用费不随 Token 档位倍增。
 Provider metadata 分别保留 `requestedServiceTier` 与 `upstreamServiceTier` 供诊断；发送给客户端的
 原始 `response.service_tier` 不变。用量中的 Fast 仅表示发送档位，不能证明上游实际加速，本地费用
-估算也不能代替官方账单。该口径仅作用于新记录，不回填历史档位或重算已存储费用。
+估算也不能代替官方账单。档位与费用在请求记录生成时确定；查询不会回填历史档位或重算已存储费用。
 
-本地计价规则只保留尚在服务的型号；已过官方关闭日期的型号不再新增本地估价。清理计价规则不删除或
-重新计算已存储的历史费用；缺少当前计价规则时，历史总额仍保留，但无法再据此补充费用拆分。
+本地计价规则覆盖尚在服务的型号。已关闭型号或缺少计价规则时，不生成新的本地估价；已存储的历史费用
+保留原值，但缺少规则时无法补充费用拆分。
 
 ## 11. 版本、更新与重启
 
