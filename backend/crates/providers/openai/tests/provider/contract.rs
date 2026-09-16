@@ -3646,12 +3646,9 @@ async fn same_account_scope_preserves_future_protocol_shapes() {
     );
     assert_eq!(
         body.get("installation_id"),
-        body.pointer("/client_metadata/installation_id")
-    );
-    assert!(
         body.pointer("/client_metadata/x-codex-installation-id")
-            .is_none()
     );
+    assert!(body.pointer("/client_metadata/installation_id").is_none());
     assert!(captured_header_values(&request, "x-codex-installation-id").is_empty());
 }
 
@@ -3799,7 +3796,7 @@ async fn websocket_account_scoping_preserves_ascii_turn_metadata_and_unicode_inp
         }).to_string().into())).await.expect("complete response");
         body
     });
-    // Official Codex keeps embedded turn metadata ASCII even for Unicode workspaces.
+    // 官方 Codex 在工作区包含 Unicode 时也保持内嵌 turn metadata 为 ASCII。
     let raw = r#"{"installation_id":"client-installation","workspaces":{"C:\\Users\\\u9879\u76ee\\\ud83d\ude80":{"label":"caf\u00e9","literal":"\\u4e2d","quoted":"\"line\n"}}}"#;
     let input = json!([{"role": "user", "content": "中文正文 🚀"}]);
     let payload = ProtocolPayload::json_object(
@@ -3809,7 +3806,12 @@ async fn websocket_account_scoping_preserves_ascii_turn_metadata_and_unicode_inp
             ("input".to_owned(), input.clone()),
             (
                 "client_metadata".to_owned(),
-                json!({"x-codex-turn-metadata": raw}),
+                json!({
+                    "x-codex-turn-metadata": raw,
+                    "x-codex-installation-id": "client-installation",
+                    "installation_id": "client-legacy-installation",
+                    "installationId": "client-camel-installation"
+                }),
             ),
         ]),
     )
@@ -3829,13 +3831,20 @@ async fn websocket_account_scoping_preserves_ascii_turn_metadata_and_unicode_inp
         event.expect("successful websocket response");
     }
     let body = server.await.expect("server");
+    let installation_id = body["client_metadata"]["x-codex-installation-id"]
+        .as_str()
+        .expect("account installation ID");
+    assert_ne!(installation_id, "client-installation");
+    for alias in ["installation_id", "installationId"] {
+        assert_eq!(body["client_metadata"][alias], installation_id);
+    }
     let encoded = body
         .pointer("/client_metadata/x-codex-turn-metadata")
         .and_then(Value::as_str)
         .expect("turn metadata");
     assert!(encoded.is_ascii(), "embedded header JSON must remain ASCII");
     let mut expected: Value = serde_json::from_str(raw).expect("original metadata");
-    expected["installation_id"] = body["client_metadata"]["installation_id"].clone();
+    expected["installation_id"] = json!(installation_id);
     assert_eq!(
         serde_json::from_str::<Value>(encoded).expect("metadata JSON"),
         expected
@@ -3864,10 +3873,16 @@ async fn http_account_scoping_keeps_unicode_metadata_ascii_in_headers_and_body()
         )
         .await;
         let body = captured_request_body(&request);
+        let installation_id = body["client_metadata"]["x-codex-installation-id"]
+            .as_str()
+            .expect("account installation ID");
+        assert_ne!(installation_id, "client-installation");
+        assert!(body.pointer("/client_metadata/installation_id").is_none());
+        assert!(body.pointer("/client_metadata/installationId").is_none());
         let headers = captured_header_values(&request, "x-codex-turn-metadata");
         assert_eq!(headers.len(), 1);
         let mut expected: Value = serde_json::from_str(raw).expect("original metadata");
-        expected["installation_id"] = body["client_metadata"]["installation_id"].clone();
+        expected["installation_id"] = json!(installation_id);
         for encoded in [
             std::str::from_utf8(&headers[0]).expect("UTF-8 header"),
             body["turnMetadata"].as_str().expect("body turn metadata"),
@@ -5557,6 +5572,24 @@ async fn capacity_http_and_websocket_opening_rejections_use_bounded_business_ret
     }
 }
 
+fn capacity_websocket_operation() -> Operation {
+    let payload = ProtocolPayload::json_object(
+        "openai",
+        Map::from_iter([
+            ("model".to_owned(), json!("gpt-5.4")),
+            ("input".to_owned(), json!("hello")),
+            ("store".to_owned(), json!(false)),
+            ("session_id".to_owned(), json!("capacity-feedback-session")),
+        ]),
+    )
+    .expect("WebSocket payload")
+    .with_context(Map::from_iter([(
+        "downstream_websocket_connection_id".to_owned(),
+        json!("ws_capacity_feedback"),
+    )]));
+    Operation::Generate(GenerateRequest::from_protocol_payload(payload))
+}
+
 fn provider_with_capacity_tracking(
     store: &Arc<MemoryAccountStore>,
     base_url: String,
@@ -5630,7 +5663,7 @@ async fn capacity_feedback_counts_business_rejections_but_excludes_diagnostic_pr
                         context("req_capacity_feedback_business", CancellationToken::new())
                     };
                     let operation = if websocket {
-                        generate_operation()
+                        capacity_websocket_operation()
                     } else {
                         http_generate_operation()
                     };
@@ -5672,12 +5705,7 @@ async fn local_websocket_connection_cancellation_does_not_supply_capacity_eviden
     let base_url = format!("http://{}", listener.local_addr().expect("address"));
     let (provider, pool) =
         provider_with_capacity_tracking(&store, base_url, Arc::clone(&cooldowns));
-    let operation = Operation::Generate(generate_with_persisted_session_context(
-        account_id,
-        "conversation_capacity_local",
-        "session_capacity_local",
-        "turn_capacity_local",
-    ));
+    let operation = capacity_websocket_operation();
     let mut stream = provider
         .execute(
             planned_request("openai", operation),
@@ -7722,6 +7750,48 @@ async fn connection_limit_payload_survives_exhausted_retry_budget() {
     );
 }
 
+const API_KEY_DOWNSTREAM_HEADERS: &[&str] = &[
+    "cf-future-proxy-field",
+    "x-forwarded-for",
+    "x-stainless-runtime",
+    "origin",
+    "referer",
+    "sec-ch-ua",
+    "sec-fetch-site",
+    "x-grok-turn-idx",
+    "x-xai-future-field",
+    "session_id",
+    "session-id",
+    "thread-id",
+    "x-codex-future",
+    "x-openai-internal-future",
+    "authorization",
+    "cookie",
+    "chatgpt-account-id",
+];
+
+fn generate_with_downstream_headers() -> Operation {
+    let mut headers: Vec<_> = API_KEY_DOWNSTREAM_HEADERS
+        .iter()
+        .map(|name| json!([name, STANDARD.encode(b"downstream-value")]))
+        .collect();
+    headers.push(json!(["x-business-extension", STANDARD.encode(b"keep")]));
+    Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object(
+            "openai",
+            json!({"model": "gpt-5.4", "input": "hello"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        )
+        .unwrap()
+        .with_context(Map::from_iter([(
+            "opaque_request_headers".to_owned(),
+            json!(headers),
+        )])),
+    ))
+}
+
 #[tokio::test]
 async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentication() {
     for prefix in ["", "/v1", "/custom/v2"] {
@@ -7776,7 +7846,7 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
         ));
         let mut stream = provider
             .execute(
-                planned_request("openai", generate_operation()),
+                planned_request("openai", generate_with_downstream_headers()),
                 context("req_api_http", CancellationToken::new()),
             )
             .await
@@ -7792,6 +7862,13 @@ async fn api_key_default_http_uses_own_prefix_plain_json_and_only_own_authentica
             .find(|request| request.method == "POST")
             .unwrap();
         assert!(!request.headers.contains_key("content-encoding"));
+        for name in API_KEY_DOWNSTREAM_HEADERS
+            .iter()
+            .filter(|name| **name != "authorization")
+        {
+            assert!(!request.headers.contains_key(*name), "leaked {name}");
+        }
+        assert_eq!(request.headers["x-business-extension"], "keep");
         for header in [
             "cookie",
             "chatgpt-account-id",
@@ -7966,6 +8043,13 @@ async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
                 assert!(!request.headers().contains_key("chatgpt-account-id"));
                 assert!(!request.headers().contains_key("cookie"));
                 assert!(!request.headers().contains_key("originator"));
+                for name in API_KEY_DOWNSTREAM_HEADERS
+                    .iter()
+                    .filter(|name| **name != "authorization")
+                {
+                    assert!(!request.headers().contains_key(*name), "leaked {name}");
+                }
+                assert_eq!(request.headers()["x-business-extension"], "keep");
             })
             .await;
         let frame = websocket.next().await.unwrap().unwrap();
@@ -7976,7 +8060,7 @@ async fn api_key_websocket_uses_api_path_and_bearer_without_oauth_identity() {
     let provider = provider(&store);
     let mut stream = provider
         .execute(
-            planned_request("openai", generate_operation()),
+            planned_request("openai", generate_with_downstream_headers()),
             diagnostic_context("req_api_ws", "acct_provider_contract"),
         )
         .await
