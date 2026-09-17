@@ -1102,6 +1102,13 @@ errorCode, errorMessage, startedAt, completedAt, expiresAt, createdAt, updatedAt
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
 `apiKey`、`provider`、`transport`、`failureClass`、`status`。
 
+管理端请求列表与详情分别保留 `requestedModel`（客户端请求）、`upstreamModel`（网关发送）与
+`upstreamResponseModel`（上游返回）。返回模型缺失时为 `null`，不使用请求或映射模型补齐。
+OpenAI 优先采用服务端 `openai-model` / `x-openai-model` 报告（流内报告可覆盖初始响应头），
+没有报告时采用正文明确声明的 `response.model`；xAI 采用原始正文声明。正文模型以终态优先，
+缺少终态声明时保留首次声明。这些值仅表示上游报告，不作为模型真实性证明，也不参与路由、
+聚合或本地计价模型选择。历史数据只回填此前已保存的 OpenAI 模型报告，其余保留未知。
+
 请求记录列表的 `search` 使用字面量前缀匹配，支持请求 ID、Client Key ID / 名称、
 账号 ID、账号邮箱与名称、请求 / 上游模型 ID、上游请求 ID。密钥名称不区分大小写，其他字段区分大小写。
 密钥名称按当前密钥记录检索，改名后使用新名称，删除后仍可按 Client Key ID 查询历史记录。
@@ -1144,6 +1151,10 @@ Dashboard 的 `accountUsage[]` 由后端提供 `usageWindow`、`metricLabel`、`
 `usageWindow` 复用账号额度窗口合同，缺失额度事实时为 `null`；窗口标签、百分比、触顶状态、重置时间
 和本地用量由 Provider/Admin 投影。前端不得从套餐缺失推断免费套餐，也不得从显示时舍入的百分比推断
 触顶。滚动窗口使用相应时间范围的本地用量，独立于 Dashboard 的今日统计范围。
+
+OpenAI 与 xAI 的本地费用估算按实际发送给上游的请求模型（`upstreamModel`）查价，结合响应中的实际
+用量计算；客户端请求 A、路由后发送 B 时按 B 计价，响应返回 C 不改变计价模型。实际发送模型缺少
+定价时不估算，也不借用响应模型的价格。Provider 明确上报的已计费金额仍优先于本地估算。
 
 OpenAI Responses 用量记录的 `serviceTier` 与本地费用估算统一采用 Provider 最终发给上游的请求
 `service_tier`，不使用响应档位覆盖或回退。例如发送 `priority`、响应回显 `default` 时，仍显示
