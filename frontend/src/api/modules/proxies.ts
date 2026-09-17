@@ -3,15 +3,20 @@ import type { RequestLocation } from '../types/request-location'
 import type { AccountGroupRef } from './account-groups'
 import request from '../request'
 
+export type IpPreference = 'auto' | 'prefer_ipv4' | 'prefer_ipv6'
+
 export interface OutboundProxyTest {
   success: boolean
   latencyMs: number
   exitIp: string | null
+  exitIpv4: string | null
+  exitIpv6: string | null
   message: string
 }
 
 export interface OutboundProxyRecord {
   location: RequestLocation | null
+  ipPreference: IpPreference
   id: string
   name: string
   endpoint: string
@@ -77,7 +82,7 @@ export function getProxies(data: { page: number, pageSize: number, search?: stri
   })
 }
 
-export function createProxy(data: { name: string, proxyUrl: string, location?: RequestLocation | null }) {
+export function createProxy(data: { name: string, proxyUrl: string, location?: RequestLocation | null, ipPreference?: IpPreference }) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/create',
     method: 'POST',
@@ -85,7 +90,7 @@ export function createProxy(data: { name: string, proxyUrl: string, location?: R
   })
 }
 
-export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string, location?: RequestLocation | null }) {
+export function updateProxy(data: { id: string, revision: number, name: string, proxyUrl?: string, location?: RequestLocation | null, ipPreference?: IpPreference }) {
   return request<ProxyMutation>({
     url: '/api/admin/proxies/update',
     method: 'POST',

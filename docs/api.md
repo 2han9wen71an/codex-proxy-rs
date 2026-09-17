@@ -459,8 +459,8 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 换号或换出口按该次选定账号解析。位置只影响带来源标记的环境上下文日期/时区和 Web Search 的结构化位置，
 不改变用户普通文本、epoch 时间戳、真实出口 IP、服务或管理端时区、数据驻留约束及 xAI 请求。
 
-测试固定经代理访问双栈端点 `https://api64.ipify.org?format=json`，返回本次连接实际使用的 IPv4 或 IPv6 出口地址，
-不分别验证两种地址族的连通性。超时 15 秒，每进程最多同时测试 4 条。
+测试经代理并发访问 IPv4 专用端点 `https://api.ipify.org?format=json` 与 IPv6 专用端点 `https://api6.ipify.org?format=json`，
+分别验证并记录双栈出口（IPv4 与 IPv6 地址），在任一地址族可用时即判定连接成功。超时 15 秒，每进程最多同时测试 4 条。
 探测器复用 OpenAI 的证书信任配置：优先读取非空的 `CODEX_CA_CERTIFICATE`，
 其次读取 `SSL_CERT_FILE`，并保留系统根证书；证书配置错误不会回退为不验证证书。
 出口测试通过不表示 Provider 账号权限或额度可用；账号可用性使用账号连接测试。

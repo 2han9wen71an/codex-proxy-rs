@@ -111,7 +111,7 @@ async fn proxy_location_is_shared_preserved_cleared_and_removed_with_binding() {
                     revision: stale_revision,
                     name: saved.name.clone(),
                     proxy: None,
-                    location: Some(Some(location.clone()))
+                    location: Some(Some(location.clone())),
                 },
                 &context()
             )
@@ -161,6 +161,8 @@ fn success() -> ProxyTestResult {
         success: true,
         latency_ms: 10,
         exit_ip: Some("203.0.113.5".parse().unwrap()),
+        exit_ipv4: Some("203.0.113.5".parse().unwrap()),
+        exit_ipv6: None,
         message: "Connected".to_owned(),
     }
 }

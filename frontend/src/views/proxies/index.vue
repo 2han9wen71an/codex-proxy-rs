@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { OutboundProxyRecord } from '@/api'
+import type { IpPreference, OutboundProxyRecord } from '@/api'
 import { LockKeyhole, MapPin, Pencil, Plus, Search, Trash2, Users, Wifi } from '@lucide/vue'
 import { watchDebounced } from '@vueuse/core'
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
@@ -39,7 +39,13 @@ const columns = defineTableColumns<OutboundProxyRecord>([
 ])
 const showForm = shallowRef(false)
 const editing = shallowRef<OutboundProxyRecord | null>(null)
-const form = reactive({ name: '', proxyUrl: '', customLocation: false, location: { country: '', region: '', city: '', timezone: '' } })
+const form = reactive({
+  name: '',
+  proxyUrl: '',
+  ipPreference: 'auto' as IpPreference,
+  customLocation: false,
+  location: { country: '', region: '', city: '', timezone: '' },
+})
 const saveAction = useAsyncAction()
 const { loading: saving } = saveAction
 const deleteAction = useAsyncAction()
@@ -56,6 +62,7 @@ function openForm(proxy: OutboundProxyRecord | null = null) {
   editing.value = proxy
   form.name = proxy?.name ?? ''
   form.proxyUrl = ''
+  form.ipPreference = proxy?.ipPreference ?? 'auto'
   form.customLocation = proxy?.location != null
   form.location = proxy?.location ? { ...proxy.location } : { country: '', region: '', city: '', timezone: '' }
   showForm.value = true
@@ -121,8 +128,20 @@ async function save() {
   await saveAction.run(async () => {
     // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
     await (editing.value
-      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined, location })
-      : createProxy({ name, proxyUrl, location }))
+      ? updateProxy({
+          id: editing.value.id,
+          revision: editing.value.revision,
+          name,
+          proxyUrl: proxyUrl || undefined,
+          location,
+          ipPreference: form.ipPreference,
+        })
+      : createProxy({
+          name,
+          proxyUrl,
+          location,
+          ipPreference: form.ipPreference,
+        }))
     showForm.value = false
     form.proxyUrl = ''
     toast.success('代理已保存')
@@ -209,10 +228,31 @@ onMounted(() => void query.execute())
                   <MapPin class="size-3 shrink-0" aria-hidden="true" />
                   <span class="truncate">{{ row.location.city }} · {{ row.location.timezone }}</span>
                 </span>
+                <span v-if="row.ipPreference === 'prefer_ipv6'" class="inline-flex w-fit items-center rounded px-1 text-cp-2xs font-semibold bg-cp-fill-secondary text-cp-text-secondary">
+                  优先 IPv6
+                </span>
+                <span v-else-if="row.ipPreference === 'prefer_ipv4'" class="inline-flex w-fit items-center rounded px-1 text-cp-2xs font-semibold bg-cp-fill-secondary text-cp-text-secondary">
+                  优先 IPv4
+                </span>
               </div>
             </template>
             <template #exitIp="{ row }">
-              <span class="break-all font-mono text-cp-xs">{{ row.lastTest?.exitIp ?? '-' }}</span>
+              <div v-if="row.lastTest?.exitIpv4 && row.lastTest?.exitIpv6" class="flex flex-col gap-0.5 font-mono text-cp-xs">
+                <span class="truncate" :title="`IPv4: ${row.lastTest.exitIpv4}`">
+                  <span class="text-cp-text-tertiary">v4:</span> {{ row.lastTest.exitIpv4 }}
+                </span>
+                <span class="truncate" :title="`IPv6: ${row.lastTest.exitIpv6}`">
+                  <span class="text-cp-text-tertiary">v6:</span> {{ row.lastTest.exitIpv6 }}
+                </span>
+              </div>
+              <div v-else-if="row.lastTest?.exitIpv4" class="font-mono text-cp-xs" :title="`IPv4: ${row.lastTest.exitIpv4}`">
+                <span class="text-cp-text-tertiary">v4:</span> {{ row.lastTest.exitIpv4 }}
+              </div>
+              <div v-else-if="row.lastTest?.exitIpv6" class="font-mono text-cp-xs" :title="`IPv6: ${row.lastTest.exitIpv6}`">
+                <span class="text-cp-text-tertiary">v6:</span> {{ row.lastTest.exitIpv6 }}
+              </div>
+              <span v-else-if="row.lastTest?.exitIp" class="break-all font-mono text-cp-xs">{{ row.lastTest.exitIp }}</span>
+              <span v-else class="text-cp-text-quaternary">-</span>
             </template>
             <template #latency="{ row }">
               <span v-if="testingIds.has(row.id)" class="text-cp-text-secondary">测试中</span>
@@ -254,6 +294,7 @@ onMounted(() => void query.execute())
       v-model="showForm"
       v-model:name="form.name"
       v-model:proxy-url="form.proxyUrl"
+      v-model:ip-preference="form.ipPreference"
       v-model:custom-location="form.customLocation"
       v-model:location="form.location"
       :proxy="editing"
