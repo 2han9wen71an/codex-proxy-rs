@@ -929,16 +929,45 @@ impl GrokCredentialCatalogService {
             .list_loaded_for_provider()
             .await
             .map_err(|_| GrokCredentialCatalogError::Store)?;
-        let mut groups = catalog_candidates_by_scope(candidates)?;
-        let Some(scope) = groups.iter().find_map(|(scope, candidates)| {
+        let mut groups = match catalog_candidates_by_scope(candidates) {
+            Ok(groups) => groups,
+            // 全部候选都被调度列表过滤时按空组处理，让下方目标账号补回继续生效。
+            Err(GrokCredentialCatalogError::NoEligibleCredential) => BTreeMap::new(),
+            Err(error) => return Err(error),
+        };
+        let scope = groups.iter().find_map(|(scope, candidates)| {
             candidates
                 .iter()
                 .any(|candidate| candidate.account.id() == account_id)
                 .then(|| scope.clone())
-        }) else {
-            return Err(GrokCredentialCatalogError::NoEligibleCredential);
+        });
+        let scope = match scope {
+            Some(scope) => scope,
+            None => {
+                // 常规调度列表不含停用账号；管理端按账号查询模型要对停用账号返回
+                // 真实上游结果，这里按目标账号本身确定套餐范围并补回候选。
+                let account = self
+                    .repository
+                    .account_by_id(account_id)
+                    .await
+                    .map_err(|_| GrokCredentialCatalogError::Store)?
+                    .ok_or(GrokCredentialCatalogError::NoEligibleCredential)?;
+                GrokCatalogScope::for_account(&account)
+                    .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?
+            }
         };
         let mut candidates = groups.remove(&scope).unwrap_or_default();
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.account.id() == account_id)
+        {
+            let loaded = self
+                .repository
+                .load_current(account_id)
+                .await
+                .map_err(|_| GrokCredentialCatalogError::Store)?;
+            candidates.push(loaded);
+        }
         candidates.sort_by(|left, right| {
             let left_preferred = left.account.id() == account_id;
             let right_preferred = right.account.id() == account_id;
