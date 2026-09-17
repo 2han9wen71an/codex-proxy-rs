@@ -188,7 +188,8 @@ Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和
 `traceparent`、`tracestate` 不因属于追踪字段而被删除。
 
 Responses 上游编码会移除 Codex 不接受的顶层 `temperature`、`max_output_tokens` 和
-`prompt_cache_retention`。
+`prompt_cache_retention`。缺少顶层 `store` 时补齐 `false`，与官方 Codex 客户端一致；
+显式提供的值保持原样。HTTP/SSE 与 WebSocket 共用这条正文兼容规则。
 `prompt_cache_key`、`reasoning`、`include` 等 Codex 参数继续保留。过滤只作用于顶层，
 不删除工具参数 schema、输入内容或 `client_metadata` 内的同名业务字段；其他未知字段继续透传。
 
