@@ -22,7 +22,6 @@ const options = computed(() => [
     label: `${proxy.name}${proxy.lastTest?.success ? '' : proxy.lastTest ? '（测试失败）' : '（未测试）'}`,
     value: proxy.id,
     description: proxy.endpoint,
-    disabled: proxy.lastTest?.success !== true,
   })),
 ])
 const selection = computed({

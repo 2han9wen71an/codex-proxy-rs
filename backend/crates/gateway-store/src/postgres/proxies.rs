@@ -230,8 +230,8 @@ pub(crate) async fn resolve_proxy_selection(
             Ok((Some(id), Some(proxy.clone())))
         }
         AccountProxySelection::Saved(id) => {
-            let (value, tested) = sqlx::query_as::<_, (String, Option<bool>)>(
-                "select proxy_url, last_test_success from outbound_proxies where id = $1 for share",
+            let value: String = sqlx::query_scalar(
+                "select proxy_url from outbound_proxies where id = $1 for share",
             )
             .bind(id)
             .fetch_optional(&mut **transaction)
@@ -241,9 +241,6 @@ pub(crate) async fn resolve_proxy_selection(
                 entity: ENTITY,
                 id: id.clone(),
             })?;
-            if tested != Some(true) {
-                return Err(conflict(id));
-            }
             Ok((
                 Some(id.clone()),
                 Some(OutboundProxy::parse(&value).map_err(|_| invalid())?),
@@ -450,15 +447,15 @@ impl ProxyStore for PgProxyRepository {
             return Err(store_error(conflict(id)));
         }
         let record = match self.get(id).await {
-            Ok(record) if record.last_test.as_ref().is_some_and(|test| test.success) => record,
-            result => {
+            Ok(record) => record,
+            Err(error) => {
                 // 拒绝预留时先等待数据库释放锁，避免连接关闭尚未生效就误挡后续代理操作。
                 sqlx::query("select pg_advisory_unlock_shared(hashtextextended($1, 739219))")
                     .bind(id)
                     .execute(&mut connection)
                     .await
                     .map_err(|_| store_error(unavailable()))?;
-                return Err(result.err().unwrap_or_else(|| store_error(conflict(id))));
+                return Err(error);
             }
         };
         Ok(ProxyImportReservation {
