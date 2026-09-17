@@ -19,6 +19,7 @@ use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
+    pub disable_fast: bool,
     pub config_revision: Revision,
     pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
@@ -28,6 +29,7 @@ pub struct RuntimeSettings {
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
     pub concurrency_wait_timeout_seconds: u32,
+    pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -63,6 +65,7 @@ impl fmt::Debug for RuntimeSettings {
                 &self.max_concurrent_per_account,
             )
             .field("request_interval_ms", &self.request_interval_ms)
+            .field("disable_fast", &self.disable_fast)
             .field("rotation_strategy", &self.rotation_strategy)
             .field("request_location_enabled", &self.request_location_enabled)
             .field("request_location", &self.request_location)
@@ -107,6 +110,7 @@ impl fmt::Debug for RuntimeSettings {
 
 #[derive(Clone)]
 pub struct RuntimeSettingsUpdate {
+    pub disable_fast: Option<bool>,
     pub admin_api_key: Option<String>,
     pub refresh_margin_seconds: u64,
     pub refresh_concurrency: u32,
@@ -115,6 +119,7 @@ pub struct RuntimeSettingsUpdate {
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
     pub concurrency_wait_timeout_seconds: u32,
+    pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
@@ -141,6 +146,7 @@ impl fmt::Debug for RuntimeSettingsUpdate {
                 "admin_api_key",
                 &self.admin_api_key.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("disable_fast", &self.disable_fast)
             .field("rotation_strategy", &self.rotation_strategy)
             .field("request_location_enabled", &self.request_location_enabled)
             .field("request_location", &self.request_location)
@@ -152,6 +158,8 @@ impl fmt::Debug for RuntimeSettingsUpdate {
 impl RuntimeSettingsUpdate {
     pub fn validate(&self) -> StoreResult<()> {
         if self.request_location.validate().is_err()
+            || self.responses_max_decompressed_body_bytes == 0
+            || isize::try_from(self.responses_max_decompressed_body_bytes).is_err()
             || self.refresh_margin_seconds == 0
             || self.refresh_concurrency == 0
             || self.max_concurrent_per_account == 0
@@ -225,11 +233,11 @@ impl RuntimeSettingsRepository for PgRuntimeSettingsRepository {
 
 pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-            "select config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled,
+            "select config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, disable_fast,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                     rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
-                    min_codex_cli_version, updated_at, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds,
+                    min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds,
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
@@ -287,11 +295,11 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<RuntimeSettings> {
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
-        "select config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled,
+        "select config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled, disable_fast,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
                 rotation_strategy, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
-                min_codex_cli_version, updated_at, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds,
+                min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds,
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
@@ -342,6 +350,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      account_auto_freeze_adaptive_concurrency = $22,
                      request_location_json = $23,
                      request_location_enabled = $24,
+                     responses_max_decompressed_body_bytes = $25,
+                     disable_fast = coalesce($26, disable_fast),
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -379,6 +389,11 @@ pub(crate) async fn update_runtime_settings_in_transaction(
             .map_err(|_| invalid_location())?,
     ))
     .bind(update.request_location_enabled)
+    .bind(
+        i64::try_from(update.responses_max_decompressed_body_bytes)
+            .map_err(|_| invalid_numeric())?,
+    )
+    .bind(update.disable_fast)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -428,6 +443,7 @@ pub(crate) async fn update_admin_api_key_in_transaction(
 
 #[derive(sqlx::FromRow)]
 struct RuntimeSettingsRow {
+    disable_fast: bool,
     config_revision: i64,
     admin_api_key: Option<String>,
     refresh_margin_seconds: i64,
@@ -447,6 +463,7 @@ struct RuntimeSettingsRow {
     max_waiting_per_key: i64,
     max_waiting_per_account: i64,
     concurrency_wait_timeout_seconds: i64,
+    responses_max_decompressed_body_bytes: i64,
     account_auto_freeze_enabled: bool,
     account_auto_freeze_threshold: i64,
     account_auto_freeze_window_seconds: i64,
@@ -465,6 +482,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
         request_interval_ms: to_u64(row.request_interval_ms)?,
         rotation_strategy: row.rotation_strategy,
+        disable_fast: row.disable_fast,
         request_location_enabled: row.request_location_enabled,
         request_location: row
             .request_location_json
@@ -481,6 +499,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         max_waiting_per_key: to_u32(row.max_waiting_per_key)?,
         max_waiting_per_account: to_u32(row.max_waiting_per_account)?,
         concurrency_wait_timeout_seconds: to_u32(row.concurrency_wait_timeout_seconds)?,
+        responses_max_decompressed_body_bytes: to_u64(row.responses_max_decompressed_body_bytes)?,
         account_auto_freeze_enabled: row.account_auto_freeze_enabled,
         account_auto_freeze_threshold: to_u32(row.account_auto_freeze_threshold)?,
         account_auto_freeze_window_seconds: to_u64(row.account_auto_freeze_window_seconds)?,

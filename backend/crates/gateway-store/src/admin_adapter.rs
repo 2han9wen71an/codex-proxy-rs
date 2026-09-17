@@ -43,12 +43,15 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
                 max_concurrent_per_account: command.max_concurrent_per_account,
+                disable_fast: command.disable_fast,
                 request_location_enabled: command.request_location_enabled,
                 request_location: command.request_location,
                 request_interval_ms: command.request_interval_ms,
                 max_waiting_per_key: command.max_waiting_per_key,
                 max_waiting_per_account: command.max_waiting_per_account,
                 concurrency_wait_timeout_seconds: command.concurrency_wait_timeout_seconds,
+                responses_max_decompressed_body_bytes: command
+                    .responses_max_decompressed_body_bytes,
                 rotation_strategy: command.rotation_strategy.as_str().to_owned(),
                 model_mappings: store_model_mappings(command.model_mappings),
                 min_codex_desktop_version: command.min_codex_desktop_version,
@@ -71,6 +74,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "runtime_settings",
                 "1",
                 vec![
+                    "disable_fast".to_owned(),
                     "request_location_enabled".to_owned(),
                     "request_location_json".to_owned(),
                     "model_mappings_json".to_owned(),
@@ -81,6 +85,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "max_waiting_per_key".to_owned(),
                     "max_waiting_per_account".to_owned(),
                     "concurrency_wait_timeout_seconds".to_owned(),
+                    "responses_max_decompressed_body_bytes".to_owned(),
                     "rotation_strategy".to_owned(),
                     "min_codex_desktop_version".to_owned(),
                     "min_codex_cli_version".to_owned(),
@@ -180,6 +185,7 @@ pub(crate) fn admin_runtime_settings(
         .collect::<AdminStoreResult<ModelMappings>>()?;
     Ok(AdminRuntimeSettings {
         config_revision: admin_revision(settings.config_revision)?,
+        disable_fast: settings.disable_fast,
         request_location_enabled: settings.request_location_enabled,
         request_location: settings.request_location,
         model_mappings,
@@ -190,6 +196,7 @@ pub(crate) fn admin_runtime_settings(
         max_waiting_per_key: settings.max_waiting_per_key,
         max_waiting_per_account: settings.max_waiting_per_account,
         concurrency_wait_timeout_seconds: settings.concurrency_wait_timeout_seconds,
+        responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
         rotation_strategy,
         min_codex_desktop_version: settings.min_codex_desktop_version,
         min_codex_cli_version: settings.min_codex_cli_version,

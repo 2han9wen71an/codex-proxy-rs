@@ -402,6 +402,7 @@ impl SettingsStore for MemorySettingsStore {
     ) -> AdminStoreResult<RuntimeSettings> {
         let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
+            disable_fast: command.disable_fast.unwrap_or(settings.disable_fast),
             request_location_enabled: command.request_location_enabled,
             request_location: command.request_location,
             config_revision: next_revision(settings.config_revision),
@@ -413,6 +414,7 @@ impl SettingsStore for MemorySettingsStore {
             max_waiting_per_key: command.max_waiting_per_key,
             max_waiting_per_account: command.max_waiting_per_account,
             concurrency_wait_timeout_seconds: command.concurrency_wait_timeout_seconds,
+            responses_max_decompressed_body_bytes: command.responses_max_decompressed_body_bytes,
             rotation_strategy: command.rotation_strategy,
             min_codex_desktop_version: command.min_codex_desktop_version,
             min_codex_cli_version: command.min_codex_cli_version,
@@ -491,6 +493,7 @@ impl MemoryAccountGroupStore {
             (
                 primary_id.clone(),
                 AccountGroupRecord {
+                    disable_fast: false,
                     id: primary_id,
                     name: "Alpha routing".to_owned(),
                     description: Some("Primary traffic".to_owned()),
@@ -512,6 +515,7 @@ impl MemoryAccountGroupStore {
             (
                 secondary_id.clone(),
                 AccountGroupRecord {
+                    disable_fast: false,
                     id: secondary_id,
                     name: "Beta routing".to_owned(),
                     description: None,
@@ -627,6 +631,7 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         let mut state = self.state.lock().expect("account groups");
         let now = Utc::now();
         let record = AccountGroupRecord {
+            disable_fast: command.disable_fast,
             id: command.id.clone(),
             name: command.name,
             description: command.description,
@@ -658,6 +663,9 @@ impl AccountGroupStore for MemoryAccountGroupStore {
         record.name = command.name;
         record.description = command.description;
         record.color = command.color;
+        if let Some(disable_fast) = command.disable_fast {
+            record.disable_fast = disable_fast;
+        }
         record.updated_at = Utc::now();
         mutation(&mut state, command.id, true)
     }
@@ -1270,6 +1278,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         ),
     ]);
     RuntimeSettings {
+        disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: Revision::new(7).expect("revision"),
@@ -1281,6 +1290,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         max_waiting_per_key: 0,
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
+        responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: RotationStrategy::Smart,
         min_codex_desktop_version: None,
         min_codex_cli_version: None,

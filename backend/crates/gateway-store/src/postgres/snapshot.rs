@@ -20,6 +20,7 @@ use super::ClientApiKeySnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotRuntimeSettings {
+    pub disable_fast: bool,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub refresh_margin_seconds: u64,
@@ -29,6 +30,7 @@ pub struct SnapshotRuntimeSettings {
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
     pub concurrency_wait_timeout_seconds: u32,
+    pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
@@ -48,6 +50,7 @@ pub struct RuntimeSnapshotData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotAccountGroupData {
+    pub disable_fast: bool,
     pub id: AccountGroupId,
     pub name: String,
     pub enabled: bool,
@@ -154,6 +157,10 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.min_codex_desktop_version,
                 data.settings.min_codex_cli_version,
             )
+            .with_responses_max_decompressed_body_bytes(
+                data.settings.responses_max_decompressed_body_bytes,
+            )
+            .with_disable_fast(data.settings.disable_fast)
             .with_request_location(
                 data.settings.request_location,
                 data.settings.request_location_enabled,
@@ -178,7 +185,10 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
             let account_groups = data
                 .account_groups
                 .into_iter()
-                .map(|group| SnapshotAccountGroupFacts::new(group.id, group.name, group.enabled))
+                .map(|group| {
+                    SnapshotAccountGroupFacts::new(group.id, group.name, group.enabled)
+                        .with_disable_fast(group.disable_fast)
+                })
                 .collect();
             let provider_accounts = data
                 .provider_accounts
@@ -249,12 +259,14 @@ async fn load_settings(
             i64, i64, i64,
             sqlx::types::Json<gateway_core::account::RequestLocation>,
             bool,
+            i64,
+            bool,
         ),
     >(
         "select config_revision, refresh_margin_seconds, refresh_concurrency,
                 max_concurrent_per_account, request_interval_ms, rotation_strategy,
                 model_mappings_json, min_codex_desktop_version,
-                min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled
+                min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, disable_fast
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -267,6 +279,8 @@ async fn load_settings(
     Ok((
         revision_from_i64(row.0)?,
         SnapshotRuntimeSettings {
+            disable_fast: row.15,
+            responses_max_decompressed_body_bytes: to_u64(row.14)?,
             request_location_enabled: row.13,
             request_location: row.12.0,
             refresh_margin_seconds: to_u64(row.1)?,
@@ -309,15 +323,16 @@ async fn load_client_keys(
 async fn load_account_groups(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<Vec<SnapshotAccountGroupData>> {
-    let rows = sqlx::query_as::<_, (String, String, bool)>(
-        "select id, name, enabled from account_groups order by id",
+    let rows = sqlx::query_as::<_, (String, String, bool, bool)>(
+        "select id, name, enabled, disable_fast from account_groups order by id",
     )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("load snapshot account groups"))?;
     rows.into_iter()
-        .map(|(id, name, enabled)| {
+        .map(|(id, name, enabled, disable_fast)| {
             Ok(SnapshotAccountGroupData {
+                disable_fast,
                 id: AccountGroupId::new(id).map_err(|_| invalid("invalid account group id"))?,
                 name,
                 enabled,

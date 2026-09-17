@@ -37,6 +37,7 @@ async fn response_json(response: axum::response::Response) -> Value {
 
 fn update_body() -> Value {
     json!({
+        "disableFast": false,
         "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
         "modelMappings": {
@@ -50,6 +51,7 @@ fn update_body() -> Value {
         "maxWaitingPerKey": 0,
         "maxWaitingPerAccount": 0,
         "concurrencyWaitTimeoutSeconds": 30,
+        "responsesMaxDecompressedBodyBytes": 67108864,
         "rotationStrategy": "round_robin",
         "minCodexDesktopVersion": "26.825.6671",
         "minCodexCliVersion": "0.40.0",
@@ -101,6 +103,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let settings = RuntimeSettings {
+        disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: Revision::new(7).expect("revision"),
@@ -121,6 +124,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         max_waiting_per_key: 0,
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
+        responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: RotationStrategy::RoundRobin,
         min_codex_desktop_version: Some("26.825.6671".to_owned()),
         min_codex_cli_version: Some("0.40.0".to_owned()),
@@ -144,7 +148,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     assert_eq!(
         value,
         json!({
-            "requestLocationEnabled": false,
+            "disableFast": false,
+        "requestLocationEnabled": false,
         "requestLocation": {"country":"US", "region":"Ohio", "city":"Piketon", "timezone":"America/New_York"},
             "modelMappings": {
                 "gpt-5.4": "gpt-5.5",
@@ -157,6 +162,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "maxWaitingPerKey": 0,
             "maxWaitingPerAccount": 0,
             "concurrencyWaitTimeoutSeconds": 30,
+            "responsesMaxDecompressedBodyBytes": 67108864,
             "rotationStrategy": "round_robin",
             "minCodexDesktopVersion": "26.825.6671",
             "minCodexCliVersion": "0.40.0",
@@ -196,6 +202,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         .cloned()
         .collect();
     let settings = RuntimeSettings {
+        disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: Revision::new(7).expect("revision"),
@@ -217,6 +224,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         max_waiting_per_key: 0,
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
+        responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
             .expect("fixture rotation strategy"),
         min_codex_desktop_version: request.min_codex_desktop_version,
@@ -574,4 +582,59 @@ async fn request_location_should_reject_invalid_or_missing_fields_without_replac
         response_json(response).await["data"]["requestLocation"],
         original
     );
+}
+
+#[test]
+fn decompression_setting_should_reject_invalid_values() {
+    let field = "responsesMaxDecompressedBodyBytes";
+    for invalid in [
+        json!(0),
+        json!(-1),
+        json!(1.5),
+        json!(u64::MAX),
+        Value::Null,
+    ] {
+        let mut body = update_body();
+        body[field] = invalid;
+        if let Ok(request) = serde_json::from_value::<UpdateRuntimeSettingsRequest>(body) {
+            assert_eq!(request.validate().unwrap_err().field(), field);
+        }
+    }
+    let mut body = update_body();
+    body.as_object_mut().unwrap().remove(field);
+    assert!(serde_json::from_value::<UpdateRuntimeSettingsRequest>(body).is_err());
+}
+
+#[tokio::test]
+async fn disable_fast_settings_updates_preserve_omitted_values() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let app = app(fixture.state());
+    for (value, expected) in [(Some(true), true), (None, true), (Some(false), false)] {
+        let mut body = update_body();
+        if let Some(value) = value {
+            body["disableFast"] = json!(value);
+        } else {
+            body.as_object_mut().unwrap().remove("disableFast");
+        }
+        let response = app
+            .clone()
+            .oneshot(request(
+                Method::POST,
+                "/api/admin/settings/update",
+                Some(body),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, "/api/admin/settings", None))
+            .await
+            .unwrap();
+        assert_eq!(
+            response_json(response).await["data"]["disableFast"],
+            expected
+        );
+    }
 }

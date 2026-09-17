@@ -34,6 +34,7 @@ pub type ModelMappings = BTreeMap<String, String>;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettingsView {
+    pub disable_fast: bool,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub model_mappings: ModelMappings,
@@ -44,6 +45,7 @@ pub struct RuntimeSettingsView {
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
     pub concurrency_wait_timeout_seconds: u32,
+    pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
@@ -64,6 +66,7 @@ pub struct RuntimeSettingsView {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeSettingsRequest {
+    pub disable_fast: Option<bool>,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub model_mappings: ModelMappings,
@@ -74,6 +77,7 @@ pub struct UpdateRuntimeSettingsRequest {
     pub max_waiting_per_key: u32,
     pub max_waiting_per_account: u32,
     pub concurrency_wait_timeout_seconds: u32,
+    pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
@@ -103,6 +107,13 @@ impl UpdateRuntimeSettingsRequest {
             if value > 1_000 {
                 return Err(WireValidationError::new(field));
             }
+        }
+        if self.responses_max_decompressed_body_bytes == 0
+            || isize::try_from(self.responses_max_decompressed_body_bytes).is_err()
+        {
+            return Err(WireValidationError::new(
+                "responsesMaxDecompressedBodyBytes",
+            ));
         }
         if !(1..=120).contains(&self.concurrency_wait_timeout_seconds) {
             return Err(WireValidationError::new("concurrencyWaitTimeoutSeconds"));
@@ -166,6 +177,7 @@ impl UpdateRuntimeSettingsRequest {
     fn into_command(self) -> Result<ReplaceRuntimeSettings, WireValidationError> {
         self.validate()?;
         Ok(ReplaceRuntimeSettings {
+            disable_fast: self.disable_fast,
             request_location_enabled: self.request_location_enabled,
             request_location: self
                 .request_location
@@ -181,6 +193,7 @@ impl UpdateRuntimeSettingsRequest {
             max_waiting_per_key: self.max_waiting_per_key,
             max_waiting_per_account: self.max_waiting_per_account,
             concurrency_wait_timeout_seconds: self.concurrency_wait_timeout_seconds,
+            responses_max_decompressed_body_bytes: self.responses_max_decompressed_body_bytes,
             rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
             min_codex_desktop_version: self.min_codex_desktop_version,
@@ -206,6 +219,7 @@ impl UpdateRuntimeSettingsRequest {
 impl From<RuntimeSettings> for RuntimeSettingsView {
     fn from(settings: RuntimeSettings) -> Self {
         Self {
+            disable_fast: settings.disable_fast,
             request_location_enabled: settings.request_location_enabled,
             request_location: settings.request_location,
             model_mappings: wire_model_mappings(settings.model_mappings),
@@ -216,6 +230,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             max_waiting_per_key: settings.max_waiting_per_key,
             max_waiting_per_account: settings.max_waiting_per_account,
             concurrency_wait_timeout_seconds: settings.concurrency_wait_timeout_seconds,
+            responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
             rotation_strategy: settings.rotation_strategy.as_str().to_owned(),
             min_codex_desktop_version: settings.min_codex_desktop_version,
             min_codex_cli_version: settings.min_codex_cli_version,

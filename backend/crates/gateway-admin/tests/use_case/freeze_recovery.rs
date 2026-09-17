@@ -25,6 +25,7 @@ use super::accounts::{FakeAccountStore, FakeProviderAdmin, account_record, event
 
 fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> RuntimeSettings {
     RuntimeSettings {
+        disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: revision(1),
@@ -36,6 +37,7 @@ fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> Runti
         max_waiting_per_key: 0,
         max_waiting_per_account: 0,
         concurrency_wait_timeout_seconds: 30,
+        responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: gateway_admin::model::settings::RotationStrategy::Smart,
         min_codex_desktop_version: None,
         min_codex_cli_version: None,
