@@ -13,6 +13,7 @@ import AccountAutoFreezeCard from './components/AccountAutoFreezeCard.vue'
 import AdminApiKeyCard from './components/AdminApiKeyCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientVersionSettings from './components/client-version/index.vue'
+import FastPolicyCard from './components/FastPolicyCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestQueueCard from './components/RequestQueueCard.vue'
@@ -149,6 +150,7 @@ onMounted(() => {
           v-model:max-waiting-per-account="maxWaitingPerAccountValue"
           v-model:concurrency-wait-timeout-seconds="concurrencyWaitTimeoutSecondsValue"
         />
+        <FastPolicyCard v-model="form.disableFast" :disabled="saving || loading || !!error" />
 
         <RequestLocationCard v-model="form.requestLocation" v-model:enabled="form.requestLocationEnabled" :disabled="saving || loading || !!error" />
         <AccountAutoFreezeCard
