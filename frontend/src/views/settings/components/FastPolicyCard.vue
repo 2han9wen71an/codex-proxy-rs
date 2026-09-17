@@ -10,10 +10,10 @@ const model = defineModel<boolean>({ required: true })
 </script>
 
 <template>
-  <BaseCard title="服务档位">
+  <BaseCard title="服务档位" description="Fast 模式下的请求将按普通档处理，关闭后仍遵循分组限制">
     <BaseForm class="max-w-6xl">
-      <BaseFormItem description="将 OpenAI Fast 请求按普通档处理；关闭后仍遵循分组限制。">
-        <BaseSwitch v-model="model" label="关闭 Fast" show-label :disabled="disabled" />
+      <BaseFormItem>
+        <BaseSwitch v-model="model" label="关闭" show-label :disabled="disabled" />
       </BaseFormItem>
     </BaseForm>
   </BaseCard>

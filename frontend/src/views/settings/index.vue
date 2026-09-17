@@ -96,20 +96,18 @@ onMounted(() => {
         ]"
         @update:model-value="switchSection"
       />
-      <div v-if="section === 'runtime'" class="flex flex-wrap items-center justify-end gap-2">
-        <BaseIconButton v-if="hasChanges" label="撤销更改" :disabled="saving || loading" @click="resetSettings">
+      <div v-if="section === 'runtime'" class="flex items-center justify-end gap-2">
+        <span v-if="hasChanges" class="mr-1 size-1.5 shrink-0 rounded-full bg-cp-warning" aria-hidden="true" />
+        <BaseIconButton v-if="hasChanges" label="撤销更改" variant="filled" :disabled="saving || loading" @click="resetSettings">
           <Undo2 class="size-4" />
         </BaseIconButton>
-        <span class="relative inline-flex">
-          <BaseButton variant="primary" :loading="saving" :disabled="loading || !hasChanges || !!error" @click="saveSettings">
-            <template #icon>
-              <Save class="size-4" />
-            </template>
-            {{ saving ? '保存中...' : '保存' }}
-          </BaseButton>
-          <span v-if="hasChanges" class="pointer-events-none absolute top-1 right-1 size-1.5 rounded-full bg-cp-warning ring-2 ring-cp-bg-layout" aria-hidden="true" />
-          <span class="sr-only" role="status">{{ hasChanges ? '有未保存更改' : '' }}</span>
-        </span>
+        <BaseButton variant="primary" :loading="saving" :disabled="loading || !hasChanges || !!error" @click="saveSettings">
+          <template #icon>
+            <Save class="size-4" />
+          </template>
+          {{ saving ? '保存中...' : '保存' }}
+        </BaseButton>
+        <span class="sr-only" role="status">{{ hasChanges ? '有未保存更改' : '' }}</span>
       </div>
     </div>
 
