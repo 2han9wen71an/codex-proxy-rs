@@ -30,6 +30,7 @@ const open = defineModel<boolean>({ required: true })
 const apiKey = defineModel<ApiKeyAccountForm>('apiKey', { required: true })
 const notes = defineModel<string>('notes', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
+const autoSwitchEnabled = defineModel<boolean>('autoSwitchEnabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
 const weight = defineModel<string>('weight', { required: true })
@@ -78,6 +79,7 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
 
       <AccountSettingsFields
         v-model:enabled="enabled"
+        v-model:auto-switch-enabled="autoSwitchEnabled"
         v-model:concurrency-limit="concurrencyLimit"
         v-model:weight="weight"
         v-model:model-access="modelAccess"

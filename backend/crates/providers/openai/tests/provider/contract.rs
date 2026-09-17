@@ -3432,9 +3432,147 @@ async fn websocket_opening_account_rejection_keeps_replay_safe_without_transport
         error.replay_is_safe(),
         "before-payload rejection is replay safe"
     );
-    // 回放安全的账号级拒绝必须把换号决策留给 Core，不得钉死同账号传输重试
-    // （旧行为会携带小时级 retry-after 的同账号重试标记，请求必然超时）。
+    // 回放安全的账号级拒绝在开启自动换号时设置 AccountRotation，将换号重试决策交给 Core
+    assert_eq!(
+        error.pre_delivery_retry(),
+        Some(PreDeliveryRetry::AccountRotation)
+    );
+}
+
+#[tokio::test]
+async fn quota_rejection_during_continuation_triggers_client_replay_failover() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut opening, _) = listener.accept().await.unwrap();
+        let _request = capture_http_request(&mut opening).await;
+        let body = r#"{"error":{"message":"You have reached your usage limit.","type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+        opening
+            .write_all(
+                format!(
+                    "HTTP/1.1 429 Too Many Requests\r\nretry-after: 129600\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+
+    let generate = generate_with_persisted_session_context(
+        "acct_provider_contract",
+        "conv_test_123",
+        "sess_test_123",
+        "thread_test_123",
+    );
+    let mut payload = generate.protocol_payload().body().clone();
+    payload.insert("previous_response_id".to_owned(), json!("resp_prev_turn_123"));
+    let operation = Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", payload).unwrap(),
+        )
+        .with_provider_session_state(generate.provider_session_state("openai").unwrap().clone()),
+    );
+
+    let provider = provider_with_base_url(&store, base_url);
+    let mut stream = provider
+        .execute(
+            planned_request("openai", operation),
+            context("req_quota_continuation_failover", CancellationToken::new())
+                .with_continuation_attempt(ContinuationAttempt::Native),
+        )
+        .await
+        .expect("prepare quota-rejected stream");
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("quota rejection must surface as an error"),
+        }
+    };
+    server.await.expect("upstream server");
+
+    let detail = error
+        .client_visible_upstream_error()
+        .expect("client replay error detail");
+    assert_eq!(error.kind(), ProviderErrorKind::ContinuationRecoveryRequired);
+    assert_eq!(error.upstream_status(), Some(400));
+    assert_eq!(
+        error.continuation_recovery_disposition(),
+        Some(ContinuationRecoveryDisposition::ClientReplayRequired)
+    );
+    assert_eq!(
+        error.upstream_code().map(|c| c.as_str()),
+        Some("previous_response_not_found")
+    );
+    assert_eq!(
+        detail.message(),
+        "Previous response was not found. Retrying the full request."
+    );
+}
+
+#[tokio::test]
+async fn quota_rejection_disabled_auto_switch_preserves_raw_429() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_provider_contract").await;
+    store.set_auto_switch("acct_provider_contract", false);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut opening, _) = listener.accept().await.unwrap();
+        let _request = capture_http_request(&mut opening).await;
+        let body = r#"{"error":{"message":"You have reached your usage limit.","type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+        opening
+            .write_all(
+                format!(
+                    "HTTP/1.1 429 Too Many Requests\r\nretry-after: 129600\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+
+    let generate = generate_with_persisted_session_context(
+        "acct_provider_contract",
+        "conv_disabled_switch",
+        "sess_disabled_switch",
+        "thread_disabled_switch",
+    );
+    let mut payload = generate.protocol_payload().body().clone();
+    payload.insert("previous_response_id".to_owned(), json!("resp_disabled_switch_123"));
+    let operation = Operation::Generate(
+        GenerateRequest::from_protocol_payload(
+            ProtocolPayload::json_object("openai", payload).unwrap(),
+        )
+        .with_provider_session_state(generate.provider_session_state("openai").unwrap().clone()),
+    );
+
+    let provider = provider_with_base_url(&store, base_url);
+    let mut stream = provider
+        .execute(
+            planned_request("openai", operation),
+            context("req_quota_disabled_switch", CancellationToken::new())
+                .with_continuation_attempt(ContinuationAttempt::Native),
+        )
+        .await
+        .expect("prepare quota-rejected stream");
+    let error = loop {
+        match stream.next().await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("quota rejection must surface as an error"),
+        }
+    };
+    server.await.expect("upstream server");
+
+    assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
+    assert_eq!(error.upstream_status(), Some(429));
     assert_eq!(error.pre_delivery_retry(), None);
+    assert_eq!(error.continuation_recovery_disposition(), None);
 }
 
 #[tokio::test]
@@ -5865,7 +6003,10 @@ async fn websocket_usage_limit_rejection_preserves_quota_state_for_account_rotat
     };
     assert_eq!(error.send_state(), UpstreamSendState::NotSent);
     assert!(error.replay_is_safe());
-    assert_eq!(error.pre_delivery_retry(), None);
+    assert_eq!(
+        error.pre_delivery_retry(),
+        Some(PreDeliveryRetry::AccountRotation)
+    );
     assert_eq!(error.retry_after(), Some(Duration::from_secs(129_600)));
     assert_eq!(error.kind(), ProviderErrorKind::QuotaExhausted);
     assert_eq!(

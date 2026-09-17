@@ -146,6 +146,7 @@ const {
 const {
   showBatchEditModal,
   schedulingEnabled: batchSchedulingEnabled,
+  autoSwitchEnabled: batchAutoSwitchEnabled,
   concurrencyLimit: batchConcurrencyLimit,
   weight: batchWeight,
   modelAccess: batchModelAccess,
@@ -172,6 +173,7 @@ const {
   editingAccount,
   notes: editingNotes,
   schedulingEnabled,
+  autoSwitchEnabled,
   concurrencyLimit: editingConcurrencyLimit,
   weight: editingWeight,
   modelAccess: editingModelAccess,
@@ -407,6 +409,7 @@ const {
       v-model:api-key="editingApiKey"
       v-model:notes="editingNotes"
       v-model:enabled="schedulingEnabled"
+      v-model:auto-switch-enabled="autoSwitchEnabled"
       v-model:concurrency-limit="editingConcurrencyLimit"
       v-model:weight="editingWeight"
       v-model:model-access="editingModelAccess"
@@ -425,6 +428,7 @@ const {
     <AccountBatchEditModal
       v-model="showBatchEditModal"
       v-model:enabled="batchSchedulingEnabled"
+      v-model:auto-switch-enabled="batchAutoSwitchEnabled"
       v-model:concurrency-limit="batchConcurrencyLimit"
       v-model:weight="batchWeight"
       v-model:model-access="batchModelAccess"

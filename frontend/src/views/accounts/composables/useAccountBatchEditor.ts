@@ -19,10 +19,11 @@ export function useAccountBatchEditor(options: {
   const selectedAccountsById = new Map<string, AccountRow>()
   const showBatchEditModal = shallowRef(false)
   const schedulingEnabled = shallowRef(true)
+  const autoSwitchEnabled = shallowRef(true)
   const concurrencyLimit = shallowRef('')
   const weight = shallowRef('1')
   const modelAccess = ref<AccountModelAccess | undefined>()
-  const editedFields = ref(new Set<'enabled' | 'concurrencyLimit' | 'weight' | 'groupIds'>())
+  const editedFields = ref(new Set<'enabled' | 'autoSwitchEnabled' | 'concurrencyLimit' | 'weight' | 'groupIds'>())
   const catalogAccountId = shallowRef<string>()
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
@@ -32,10 +33,10 @@ export function useAccountBatchEditor(options: {
   const hasChanges = computed(() => Boolean(modelAccess.value) || editedFields.value.size > 0 || proxyMode.value !== 'preserve')
 
   // 未操作的字段保持每个账号原值，避免展开表单就覆盖混合设置。
-  watch([schedulingEnabled, concurrencyLimit, weight, selectedGroupIds], (values, previous) => {
+  watch([schedulingEnabled, autoSwitchEnabled, concurrencyLimit, weight, selectedGroupIds], (values, previous) => {
     if (!showBatchEditModal.value || saving.value)
       return
-    const fields = ['enabled', 'concurrencyLimit', 'weight', 'groupIds'] as const
+    const fields = ['enabled', 'autoSwitchEnabled', 'concurrencyLimit', 'weight', 'groupIds'] as const
     fields.forEach((field, index) => {
       if (values[index] !== previous[index])
         editedFields.value.add(field)
@@ -51,6 +52,7 @@ export function useAccountBatchEditor(options: {
     editedFields.value.clear()
     catalogAccountId.value = accounts[0]?.id
     schedulingEnabled.value = accounts.every(account => account.enabled)
+    autoSwitchEnabled.value = accounts.every(account => account.autoSwitchEnabled)
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = sharedConcurrencyLimit(accounts)
@@ -88,6 +90,7 @@ export function useAccountBatchEditor(options: {
         modelAccess: modelAccess.value,
         outboundProxyId: proxyMode.value === 'preserve' ? undefined : proxyMode.value === 'direct' ? '' : proxyId.value.trim(),
         enabled: editedFields.value.has('enabled') ? schedulingEnabled.value : undefined,
+        autoSwitchEnabled: editedFields.value.has('autoSwitchEnabled') ? autoSwitchEnabled.value : undefined,
         concurrencyLimit: editedFields.value.has('concurrencyLimit') ? scheduling.values.concurrencyLimit : undefined,
         weight: editedFields.value.has('weight') ? scheduling.values.weight : undefined,
         groupIds: editedFields.value.has('groupIds') ? [...new Set(selectedGroupIds.value)] : undefined,
@@ -127,6 +130,7 @@ export function useAccountBatchEditor(options: {
     if (open || isSaving)
       return
     schedulingEnabled.value = true
+    autoSwitchEnabled.value = true
     proxyMode.value = 'preserve'
     proxyId.value = ''
     concurrencyLimit.value = ''
@@ -137,6 +141,7 @@ export function useAccountBatchEditor(options: {
   return {
     showBatchEditModal,
     schedulingEnabled,
+    autoSwitchEnabled,
     concurrencyLimit,
     weight,
     modelAccess,

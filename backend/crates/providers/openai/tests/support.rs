@@ -114,6 +114,14 @@ impl MemoryAccountStore {
             .map(|stored| stored.account.clone())
     }
 
+    pub(crate) fn set_auto_switch(&self, id: &str, auto_switch_enabled: bool) {
+        let id = ProviderAccountId::new(id).expect("valid ID");
+        let mut guard = self.accounts.lock().expect("store lock");
+        if let Some(stored) = guard.get_mut(&id) {
+            stored.account = stored.account.clone().with_auto_switch(auto_switch_enabled);
+        }
+    }
+
     pub(crate) fn set_scheduling(
         &self,
         id: &str,

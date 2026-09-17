@@ -733,6 +733,7 @@ pub struct ProviderAccount {
     authentication_kind: String,
     revision: CredentialRevision,
     enabled: bool,
+    auto_switch_enabled: bool,
     concurrency_limit: Option<AccountConcurrencyLimit>,
     weight: AccountWeight,
     model_access: super::AccountModelAccess,
@@ -770,6 +771,7 @@ impl ProviderAccount {
             authentication_kind,
             revision,
             enabled: true,
+            auto_switch_enabled: true,
             concurrency_limit: None,
             weight: AccountWeight::DEFAULT,
             model_access: super::AccountModelAccess::all(),
@@ -860,6 +862,17 @@ impl ProviderAccount {
         self.concurrency_limit = concurrency_limit;
         self.weight = weight;
         self
+    }
+
+    #[must_use]
+    pub const fn with_auto_switch(mut self, auto_switch_enabled: bool) -> Self {
+        self.auto_switch_enabled = auto_switch_enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn auto_switch_enabled(&self) -> bool {
+        self.auto_switch_enabled
     }
 
     /// 设置 RT 存在性与失败后的最早重试时刻。

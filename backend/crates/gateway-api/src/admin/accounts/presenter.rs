@@ -106,6 +106,7 @@ pub(super) fn account_view(item: AccountDirectoryItem, now: DateTime<Utc>) -> Ac
             .map(|reason| reason.as_str().to_owned()),
         error_message: projection.error_message,
         enabled: account.enabled,
+        auto_switch_enabled: account.auto_switch_enabled,
         concurrency_limit: account.concurrency_limit.map(|limit| limit.get()),
         weight: account.weight.get(),
         model_access: account.model_access,

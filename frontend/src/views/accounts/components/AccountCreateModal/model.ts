@@ -13,6 +13,7 @@ export interface AccountCreateForm {
   apiKey: ApiKeyAccountForm
   notes: string
   enabled: boolean
+  autoSwitchEnabled: boolean
   concurrencyLimit: string
   weight: string
   modelAccess?: AccountModelAccess
@@ -33,6 +34,7 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     apiKey: emptyApiKeyAccountForm(),
     notes: '',
     enabled: true,
+    autoSwitchEnabled: true,
     concurrencyLimit: '',
     weight: '1',
     groupIds: [],
@@ -65,6 +67,7 @@ export function accountImportSettings(form: AccountCreateForm) {
   return {
     modelAccess: form.modelAccess,
     enabled: form.enabled,
+    autoSwitchEnabled: form.autoSwitchEnabled,
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     notes: form.notes.trim() || undefined,

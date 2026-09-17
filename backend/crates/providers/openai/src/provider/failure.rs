@@ -449,8 +449,18 @@ pub(super) fn schedule_authoritative_quota_refresh_after_failure(
     }));
 }
 
-pub(super) fn map_handshake_error(error: CodexClientError) -> MappedProviderFailure {
-    map_client_error(error, UpstreamSendState::Ambiguous, true)
+pub(super) fn map_handshake_error(
+    error: CodexClientError,
+    auto_switch_enabled: bool,
+    is_continuation: bool,
+) -> MappedProviderFailure {
+    map_client_error(
+        error,
+        UpstreamSendState::Ambiguous,
+        true,
+        auto_switch_enabled,
+        is_continuation,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -684,10 +694,20 @@ pub(super) fn continuation_replay_required_error(reason: &'static str) -> Provid
     ))
 }
 
-pub(super) fn map_stream_error(error: CodexClientError) -> MappedProviderFailure {
+pub(super) fn map_stream_error(
+    error: CodexClientError,
+    auto_switch_enabled: bool,
+    is_continuation: bool,
+) -> MappedProviderFailure {
     let allows_pre_delivery_retry = stream_transport_allows_pre_delivery_retry(&error);
     let websocket_failure = error.transport() == Some(CodexBackendTransport::WebSocket);
-    let mut failure = map_client_error(error, UpstreamSendState::Sent, false);
+    let mut failure = map_client_error(
+        error,
+        UpstreamSendState::Sent,
+        false,
+        auto_switch_enabled,
+        is_continuation,
+    );
     failure.websocket_transport_retryable = allows_pre_delivery_retry && websocket_failure;
     if allows_pre_delivery_retry && !websocket_failure {
         failure.error = failure.error.with_pre_delivery_retry();
@@ -717,6 +737,8 @@ pub(super) fn map_canonical_error(
     set_cookie_headers: &[String],
     rate_limit_headers: &[(String, String)],
     replay_boundary: ReplayBoundary,
+    auto_switch_enabled: bool,
+    is_continuation: bool,
 ) -> MappedProviderFailure {
     match error {
         CodexCanonicalError::Protocol(error) => MappedProviderFailure::plain(error),
@@ -730,6 +752,8 @@ pub(super) fn map_canonical_error(
             ),
             None,
             replay_boundary,
+            auto_switch_enabled,
+            is_continuation,
         ),
     }
 }
@@ -738,6 +762,8 @@ pub(super) fn map_client_error(
     error: CodexClientError,
     uncertain_state: UpstreamSendState,
     observe_transport: bool,
+    auto_switch_enabled: bool,
+    is_continuation: bool,
 ) -> MappedProviderFailure {
     let diagnostic = client_diagnostic(&error);
     let raw_upstream_error = match &error {
@@ -777,7 +803,13 @@ pub(super) fn map_client_error(
         .then(|| codex_error_observation(&error))
         .flatten();
     if let Some(failure) = error.upstream_failure() {
-        return map_upstream_failure(failure, observation, ReplayBoundary::BeforeSemanticOutput);
+        return map_upstream_failure(
+            failure,
+            observation,
+            ReplayBoundary::BeforeSemanticOutput,
+            auto_switch_enabled,
+            is_continuation,
+        );
     }
     let mut failure = match error {
         CodexClientError::Upstream { .. } => MappedProviderFailure::plain(provider_error(
@@ -1167,6 +1199,8 @@ pub(super) fn map_upstream_failure(
     mut failure: CodexUpstreamFailure,
     observation: Option<ProviderResponseObservation>,
     replay_boundary: ReplayBoundary,
+    auto_switch_enabled: bool,
+    is_continuation: bool,
 ) -> MappedProviderFailure {
     let category = failure.category();
     let capacity_unavailable = category == CodexFailureCategory::CapacityUnavailable;
@@ -1174,10 +1208,21 @@ pub(super) fn map_upstream_failure(
         .status
         .is_some_and(|status| status.is_client_error())
         && is_cyber_policy_code(failure.code.as_deref());
+    let quota_exhausted = matches!(
+        category,
+        CodexFailureCategory::UsageLimitExhausted | CodexFailureCategory::QuotaExhausted
+    ) || (failure.status == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) && !capacity_unavailable);
+    let continuation_failover = auto_switch_enabled
+        && quota_exhausted
+        && is_continuation
+        && failure.send_phase != CodexUpstreamSendPhase::Ambiguous
+        && replay_boundary.permits_provider_proof();
+
     let continuation_failure = failure
         .persistable_code()
         .filter(|code| is_history_failure_code(code))
-        .map(|_| ContinuationFailure::HistoryUnavailable);
+        .map(|_| ContinuationFailure::HistoryUnavailable)
+        .or(continuation_failover.then_some(ContinuationFailure::HistoryUnavailable));
     let send_state = upstream_send_state(failure.send_phase);
     let error_kind = if continuation_failure.is_some() {
         ProviderErrorKind::ContinuationRecoveryRequired
@@ -1193,7 +1238,7 @@ pub(super) fn map_upstream_failure(
             failure.client_error_type.clone(),
         ));
     }
-    if let Some(response) = failure.client_response.take() {
+    if !continuation_failover && let Some(response) = failure.client_response.take() {
         let response = (*response).into_parts();
         error = error.with_client_visible_upstream_response(
             ClientVisibleUpstreamResponse::new(
@@ -1219,12 +1264,30 @@ pub(super) fn map_upstream_failure(
         error = error.with_replay_safe();
     }
     if let Some(continuation_failure) = continuation_failure {
+        let reason = if continuation_failover {
+            "quota_exhausted_failover"
+        } else {
+            "upstream_rejected"
+        };
         error = error
             .with_continuation_failure(continuation_failure)
             .with_continuation_recovery_disposition(
                 ContinuationRecoveryDisposition::ClientReplayRequired,
             )
-            .with_continuation_unavailable_reason("upstream_rejected");
+            .with_continuation_unavailable_reason(reason);
+
+        if continuation_failover {
+            error = error
+                .with_status(reqwest::StatusCode::BAD_REQUEST.as_u16())
+                .with_upstream_code(OpaqueUpstreamValue::new(
+                    PREVIOUS_RESPONSE_NOT_FOUND_CODE.to_owned(),
+                ))
+                .with_client_visible_upstream_error(ClientVisibleUpstreamError::new(
+                    PREVIOUS_RESPONSE_NOT_FOUND_MESSAGE,
+                    Some(PREVIOUS_RESPONSE_NOT_FOUND_CODE.to_owned()),
+                    Some("invalid_request_error".to_owned()),
+                ));
+        }
     }
     if let Some(retry_after) = failure.retry_after_seconds.map(Duration::from_secs) {
         error = error.with_retry_after(retry_after);
@@ -1240,7 +1303,12 @@ pub(super) fn map_upstream_failure(
             max_delay,
         );
     }
-    if let Some(code) = failure.persistable_code() {
+    if auto_switch_enabled && quota_exhausted && !is_continuation && error.replay_is_safe() {
+        error = error.with_pre_delivery_retry();
+    }
+    if let Some(code) = failure.persistable_code()
+        && !continuation_failover
+    {
         error = error.with_upstream_code(OpaqueUpstreamValue::new(code.to_owned()));
     }
     if let Some(request_id) = failure.request_id.as_deref() {

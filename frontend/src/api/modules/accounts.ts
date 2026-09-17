@@ -137,6 +137,7 @@ export interface Account {
   errorReason: AccountErrorReason | null
   errorMessage: string | null
   enabled: boolean
+  autoSwitchEnabled: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess: AccountModelAccess
@@ -378,6 +379,7 @@ interface AccountUpdateParam {
   accountId: string
   notes?: string
   enabled: boolean
+  autoSwitchEnabled: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess
@@ -389,6 +391,7 @@ interface AccountBatchUpdateParam {
   outboundProxyId?: string
   accountIds: string[]
   enabled?: boolean
+  autoSwitchEnabled?: boolean
   concurrencyLimit?: number | null
   weight?: number
   modelAccess?: AccountModelAccess
@@ -403,6 +406,7 @@ interface AccountDeleteParams {
 interface AccountImportSettings {
   notes?: string
   enabled: boolean
+  autoSwitchEnabled: boolean
   concurrencyLimit: number | null
   weight: number
   modelAccess?: AccountModelAccess

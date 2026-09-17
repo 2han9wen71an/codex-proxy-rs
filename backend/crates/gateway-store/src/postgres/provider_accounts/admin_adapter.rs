@@ -237,7 +237,7 @@ impl PgAdminAccountStore {
         }
         if let Some(settings) = &settings {
             changed_fields
-                .extend(["enabled", "concurrency_limit", "weight", "group_ids"].map(str::to_owned));
+                .extend(["enabled", "auto_switch_enabled", "concurrency_limit", "weight", "group_ids"].map(str::to_owned));
             if settings.notes.is_some() {
                 changed_fields.push("notes".to_owned());
             }
@@ -292,7 +292,7 @@ impl PgAdminAccountStore {
         let mut changed_fields = vec!["credentials".to_owned()];
         if let Some(settings) = &settings {
             changed_fields
-                .extend(["enabled", "concurrency_limit", "weight", "groups"].map(str::to_owned));
+                .extend(["enabled", "auto_switch_enabled", "concurrency_limit", "weight", "groups"].map(str::to_owned));
             if settings.model_access.is_some() {
                 changed_fields.push("model_access".to_owned());
             }
@@ -696,6 +696,7 @@ impl AccountStore for PgAdminAccountStore {
         })?;
         let mut changed_fields = vec![
             "enabled".to_owned(),
+            "auto_switch_enabled".to_owned(),
             "concurrency_limit".to_owned(),
             "weight".to_owned(),
             "groups".to_owned(),
@@ -715,6 +716,7 @@ impl AccountStore for PgAdminAccountStore {
                 account_ids: vec![command.account_id.clone()],
                 notes: command.notes,
                 enabled: Some(command.enabled),
+                auto_switch_enabled: Some(command.auto_switch_enabled),
                 concurrency_limit: Some(command.concurrency_limit),
                 weight: Some(command.weight),
                 model_access: command.model_access,
@@ -861,6 +863,7 @@ impl AccountStore for PgAdminAccountStore {
         let mut changed_fields = Vec::new();
         for (changed, field) in [
             (command.enabled.is_some(), "enabled"),
+            (command.auto_switch_enabled.is_some(), "auto_switch_enabled"),
             (command.concurrency_limit.is_some(), "concurrency_limit"),
             (command.weight.is_some(), "weight"),
             (command.group_ids.is_some(), "groups"),
@@ -881,6 +884,7 @@ impl AccountStore for PgAdminAccountStore {
                 account_ids: command.account_ids,
                 notes: None,
                 enabled: command.enabled,
+                auto_switch_enabled: command.auto_switch_enabled,
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
                 model_access: command.model_access,

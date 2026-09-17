@@ -30,12 +30,18 @@ impl AccountProvider {
     }
 }
 
+const fn default_auto_switch_enabled() -> bool {
+    true
+}
+
 /// 导入统一设置，复用编辑账号的备注、调度和分组约束。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountImportSettingsRequest {
     pub notes: Option<String>,
     pub enabled: bool,
+    #[serde(default = "default_auto_switch_enabled")]
+    pub auto_switch_enabled: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
@@ -58,6 +64,7 @@ impl AccountImportSettingsRequest {
         Ok(gateway_admin::model::accounts::AccountImportSettings {
             notes: self.notes,
             enabled: self.enabled,
+            auto_switch_enabled: self.auto_switch_enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,
@@ -219,6 +226,8 @@ pub struct UpdateAccountRequest {
     pub account_id: String,
     pub notes: Option<String>,
     pub enabled: bool,
+    #[serde(default = "default_auto_switch_enabled")]
+    pub auto_switch_enabled: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub concurrency_limit: Option<u64>,
     pub weight: u64,
@@ -246,6 +255,7 @@ impl UpdateAccountRequest {
             account_id: self.account_id,
             notes: self.notes,
             enabled: self.enabled,
+            auto_switch_enabled: self.auto_switch_enabled,
             concurrency_limit: parse_concurrency_limit(self.concurrency_limit)?,
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,

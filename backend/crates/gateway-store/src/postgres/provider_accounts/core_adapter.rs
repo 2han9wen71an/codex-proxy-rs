@@ -41,6 +41,7 @@ impl ProviderAccountStore for PgProviderAccountRepository {
                 .map(DateTime::<Utc>::from),
             next_refresh_at: account.account.next_refresh_at().map(DateTime::<Utc>::from),
             enabled: account.account.enabled(),
+            auto_switch_enabled: account.account.auto_switch_enabled(),
             concurrency_limit: account.account.concurrency_limit(),
             weight: account.account.weight(),
             model_access: Some(

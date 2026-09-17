@@ -20,6 +20,7 @@ withDefaults(defineProps<{
 
 const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', { required: true })
 const enabled = defineModel<boolean>('enabled', { required: true })
+const autoSwitchEnabled = defineModel<boolean>('autoSwitchEnabled', { required: true })
 const concurrencyLimit = defineModel<string>('concurrencyLimit', { required: true })
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
@@ -35,6 +36,17 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
       <BaseSwitch
         v-model="enabled"
         label="切换账号调度"
+        :disabled="disabled"
+      />
+    </div>
+    <div class="flex min-h-6 items-center justify-between gap-3">
+      <div class="grid gap-0.5">
+        <span class="text-cp leading-none font-medium text-cp-text-secondary">自动换号</span>
+        <span class="text-xs text-cp-text-muted">额度耗尽或遇到错误时自动切换到其他可用账号</span>
+      </div>
+      <BaseSwitch
+        v-model="autoSwitchEnabled"
+        label="切换自动换号"
         :disabled="disabled"
       />
     </div>

@@ -25,6 +25,7 @@ const form = defineModel<AccountCreateForm>({ required: true })
     </fieldset>
     <AccountSettingsFields
       v-model:enabled="form.enabled"
+      v-model:auto-switch-enabled="form.autoSwitchEnabled"
       v-model:concurrency-limit="form.concurrencyLimit"
       v-model:weight="form.weight"
       v-model:model-access="form.modelAccess"

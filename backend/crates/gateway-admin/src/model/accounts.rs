@@ -23,6 +23,7 @@ pub use gateway_core::account::{
 pub struct AccountImportSettings {
     pub notes: Option<String>,
     pub enabled: bool,
+    pub auto_switch_enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
@@ -108,6 +109,7 @@ pub struct AccountRecord {
     pub access_token_expires_at: Option<DateTime<Utc>>,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
+    pub auto_switch_enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub model_access: gateway_core::account::AccountModelAccess,
@@ -233,6 +235,7 @@ pub struct UpdateAccount {
     /// 缺省保留备注；空字符串清空备注。
     pub notes: Option<String>,
     pub enabled: bool,
+    pub auto_switch_enabled: bool,
     pub concurrency_limit: Option<AccountConcurrencyLimit>,
     pub weight: AccountWeight,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
@@ -252,6 +255,7 @@ pub struct AccountUpdateResult {
 pub struct BatchUpdateAccounts {
     pub account_ids: Vec<String>,
     pub enabled: Option<bool>,
+    pub auto_switch_enabled: Option<bool>,
     pub concurrency_limit: Option<Option<AccountConcurrencyLimit>>,
     pub weight: Option<AccountWeight>,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,

@@ -347,9 +347,13 @@ pub(super) async fn create_response_attempt(
 
 pub(super) fn map_handshake_attempt_error(
     error: CodexHandshakeAttemptError,
+    auto_switch_enabled: bool,
+    is_continuation: bool,
 ) -> MappedProviderFailure {
     match error {
-        CodexHandshakeAttemptError::Client(error) => map_handshake_error(error),
+        CodexHandshakeAttemptError::Client(error) => {
+            map_handshake_error(error, auto_switch_enabled, is_continuation)
+        }
         CodexHandshakeAttemptError::Cancelled => MappedProviderFailure::plain(provider_error(
             ProviderErrorKind::Cancelled,
             UpstreamSendState::Ambiguous,
@@ -441,7 +445,12 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
                 error,
             );
         }
-        let response = match response.map_err(map_handshake_attempt_error) {
+        let auto_switch_enabled = active_account.auto_switch_enabled();
+        let is_continuation = request.context.continuation().is_some()
+            || request.context.continuation_attempt() != gateway_core::engine::ContinuationAttempt::None;
+        let response = match response.map_err(|err| {
+            map_handshake_attempt_error(err, auto_switch_enabled, is_continuation)
+        }) {
             Ok(response) => response,
             Err(mut failure) => {
                 if let Some(observation) = failure.observation.take() {
@@ -603,6 +612,10 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             lease.account_switch(),
         );
         let request_transport_requirement = transport_requirement(&request);
+        let auto_switch_enabled = active_account.auto_switch_enabled();
+        let is_continuation = context.continuation().is_some()
+            || context.continuation_attempt() != gateway_core::engine::ContinuationAttempt::None
+            || request.previous_response_id().is_some();
         let trace = context.trace();
         let response = create_response_attempt(
             &client,
@@ -635,7 +648,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 error,
             );
         }
-        let response = response.map_err(map_handshake_attempt_error);
+        let response = response.map_err(|err| {
+            map_handshake_attempt_error(err, auto_switch_enabled, is_continuation)
+        });
         let response = match response {
             Ok(response) => response,
             Err(mut failure) => {
@@ -776,7 +791,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             ),
                             &error,
                         );
-                        Err(map_stream_error(error))
+                        Err(map_stream_error(error, auto_switch_enabled, is_continuation))
                     }
                     None => Ok(PreCommitPoll::Upstream(None)),
                 },
@@ -897,6 +912,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                         ReplayBoundary::from_semantic_output(
                             semantic_output_seen || pre_commit_events.is_committed(),
                         ),
+                        auto_switch_enabled,
+                        is_continuation,
                     ),
                     atomic_upstream_failure,
                 )
@@ -1006,6 +1023,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                     ReplayBoundary::from_semantic_output(
                         semantic_output_seen || pre_commit_events.is_committed(),
                     ),
+                    auto_switch_enabled,
+                    is_continuation,
                 ),
                 atomic_upstream_failure,
             )
