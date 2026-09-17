@@ -167,7 +167,9 @@ sequenceDiagram
 
 Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/CLI，Core 使用同一请求冻结的
 `RuntimeSnapshot` 比较对应最低版本。Desktop 优先于其 User-Agent 内嵌的 CLI/Core 标记；未知客户端不
-应用门禁。低版本或已识别但版本不可用时，在进入 Provider 前返回稳定的 `426` 合同。
+应用门禁。API 识别手机远程 UA 后缀；这类 Desktop 请求缺失应用版本时不应用门禁，不以 Core 或远程
+客户端版本代替应用版本。其余低版本或已识别但版本不可用时，在进入 Provider 前返回稳定的 `426` 合同，
+具体请求头规则见 [API 鉴权与公共约定](api.md#1-鉴权与公共约定)。
 
 核心不变量：
 
