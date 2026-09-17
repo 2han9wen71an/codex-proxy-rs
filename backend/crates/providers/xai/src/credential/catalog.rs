@@ -941,19 +941,28 @@ impl GrokCredentialCatalogService {
                 .any(|candidate| candidate.account.id() == account_id)
                 .then(|| scope.clone())
         });
+        let mut pinned_candidate = None;
         let scope = match scope {
             Some(scope) => scope,
             None => {
                 // 常规调度列表不含停用账号；管理端按账号查询模型要对停用账号返回
-                // 真实上游结果，这里按目标账号本身确定套餐范围并补回候选。
+                // 真实上游结果。按同一 revision 加载账号与凭据，避免并发更新套餐时
+                // 把新凭据的目录写入旧套餐 cache。
                 let account = self
                     .repository
                     .account_by_id(account_id)
                     .await
                     .map_err(|_| GrokCredentialCatalogError::Store)?
                     .ok_or(GrokCredentialCatalogError::NoEligibleCredential)?;
-                GrokCatalogScope::for_account(&account)
-                    .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?
+                let loaded = self
+                    .repository
+                    .load(account_id, account.revision())
+                    .await
+                    .map_err(|_| GrokCredentialCatalogError::Store)?;
+                let scope = GrokCatalogScope::for_account(&loaded.account)
+                    .map_err(|_| GrokCredentialCatalogError::InvalidCredentialData)?;
+                pinned_candidate = Some(loaded);
+                scope
             }
         };
         let mut candidates = groups.remove(&scope).unwrap_or_default();
@@ -961,11 +970,14 @@ impl GrokCredentialCatalogService {
             .iter()
             .any(|candidate| candidate.account.id() == account_id)
         {
-            let loaded = self
-                .repository
-                .load_current(account_id)
-                .await
-                .map_err(|_| GrokCredentialCatalogError::Store)?;
+            let loaded = match pinned_candidate {
+                Some(loaded) => loaded,
+                None => self
+                    .repository
+                    .load_current(account_id)
+                    .await
+                    .map_err(|_| GrokCredentialCatalogError::Store)?,
+            };
             candidates.push(loaded);
         }
         candidates.sort_by(|left, right| {
