@@ -12,6 +12,7 @@ use gateway_core::account::{OutboundProxy, ProviderAccountId};
 pub(super) struct TestProxies {
     pub events: Option<super::accounts::EventLog>,
     pub accounts: Option<Vec<ProxyAccountRef>>,
+    pub record: Option<ProxyRecord>,
 }
 
 struct ImportGuard(super::accounts::EventLog);
@@ -70,8 +71,11 @@ impl ProxyStore for TestProxies {
             page_size: query.page_size.get(),
         })
     }
-    async fn get(&self, _: &str) -> AdminStoreResult<ProxyRecord> {
-        Err(super::unavailable("proxy"))
+    async fn get(&self, id: &str) -> AdminStoreResult<ProxyRecord> {
+        self.record
+            .clone()
+            .filter(|record| record.id == id)
+            .ok_or_else(|| super::unavailable("proxy"))
     }
     async fn create(&self, _: NewProxy, _: &MutationContext) -> AdminStoreResult<ProxyMutation> {
         Err(super::unavailable("proxy"))
@@ -102,6 +106,60 @@ impl ProxyStore for TestProxies {
 impl ProxyProbe for TestProxies {
     async fn test(&self, _: &OutboundProxy) -> ProxyTestResult {
         panic!("unexpected proxy probe")
+    }
+}
+
+#[tokio::test]
+async fn authorization_uses_selected_proxy_regardless_of_probe_status() {
+    use super::accounts::{FakeAccountStore, FakeProviderAdmin, context, events, recorded};
+    use gateway_admin::model::provider_credentials::StartAuthorization;
+    use std::sync::Arc;
+
+    for kind in ["openai", "xai"] {
+        for probe_success in [None, Some(false), Some(true)] {
+            let events = events();
+            let now = chrono::Utc::now();
+            let services = super::AdminHarness::new()
+                .provider(FakeProviderAdmin::new(kind, events.clone()))
+                .accounts(FakeAccountStore::new(kind, events.clone()))
+                .proxies(Arc::new(TestProxies {
+                    record: Some(ProxyRecord {
+                        location: None,
+                        id: "proxy_oauth".to_owned(),
+                        name: "授权出口".to_owned(),
+                        proxy: OutboundProxy::parse("http://127.0.0.1:8080").unwrap(),
+                        revision: Revision::new(1).unwrap(),
+                        account_count: 0,
+                        last_test_at: probe_success.map(|_| now),
+                        last_test: probe_success.map(|success| ProxyTestResult {
+                            success,
+                            latency_ms: 10,
+                            exit_ip: None,
+                            exit_ipv4: None,
+                            exit_ipv6: None,
+                            message: "出口探测结果".to_owned(),
+                        }),
+                        created_at: now,
+                        updated_at: now,
+                    }),
+                    ..Default::default()
+                }))
+                .build()
+                .await;
+            let command = StartAuthorization {
+                outbound_proxy: Some(AccountProxySelection::Saved("proxy_oauth".to_owned())),
+                context: context("oauth-proxy-status"),
+                name: "授权账号".to_owned(),
+                reauthorization: None,
+            };
+            let result = if kind == "openai" {
+                services.openai().start_authorization(command).await
+            } else {
+                services.xai().start_authorization(command).await
+            };
+            assert!(result.is_ok(), "{kind}, {probe_success:?}: {result:?}");
+            assert_eq!(recorded(&events), ["provider.start_authorization"]);
+        }
     }
 }
 

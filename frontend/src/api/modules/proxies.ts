@@ -7,6 +7,8 @@ export interface OutboundProxyTest {
   success: boolean
   latencyMs: number
   exitIp: string | null
+  exitIpv4: string | null
+  exitIpv6: string | null
   message: string
 }
 

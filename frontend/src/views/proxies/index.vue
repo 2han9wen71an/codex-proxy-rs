@@ -39,7 +39,12 @@ const columns = defineTableColumns<OutboundProxyRecord>([
 ])
 const showForm = shallowRef(false)
 const editing = shallowRef<OutboundProxyRecord | null>(null)
-const form = reactive({ name: '', proxyUrl: '', customLocation: false, location: { country: '', region: '', city: '', timezone: '' } })
+const form = reactive({
+  name: '',
+  proxyUrl: '',
+  customLocation: false,
+  location: { country: '', region: '', city: '', timezone: '' },
+})
 const saveAction = useAsyncAction()
 const { loading: saving } = saveAction
 const deleteAction = useAsyncAction()
@@ -121,8 +126,18 @@ async function save() {
   await saveAction.run(async () => {
     // 编辑时留空保留已保存的地址和认证，不能用脱敏地址覆盖原连接。
     await (editing.value
-      ? updateProxy({ id: editing.value.id, revision: editing.value.revision, name, proxyUrl: proxyUrl || undefined, location })
-      : createProxy({ name, proxyUrl, location }))
+      ? updateProxy({
+          id: editing.value.id,
+          revision: editing.value.revision,
+          name,
+          proxyUrl: proxyUrl || undefined,
+          location,
+        })
+      : createProxy({
+          name,
+          proxyUrl,
+          location,
+        }))
     showForm.value = false
     form.proxyUrl = ''
     toast.success('代理已保存')
@@ -212,7 +227,22 @@ onMounted(() => void query.execute())
               </div>
             </template>
             <template #exitIp="{ row }">
-              <span class="break-all font-mono text-cp-xs">{{ row.lastTest?.exitIp ?? '-' }}</span>
+              <div v-if="row.lastTest?.exitIpv4 && row.lastTest?.exitIpv6" class="flex flex-col gap-0.5 font-mono text-cp-xs">
+                <span class="truncate" :title="`IPv4: ${row.lastTest.exitIpv4}`">
+                  {{ row.lastTest.exitIpv4 }}
+                </span>
+                <span class="truncate" :title="`IPv6: ${row.lastTest.exitIpv6}`">
+                  {{ row.lastTest.exitIpv6 }}
+                </span>
+              </div>
+              <div v-else-if="row.lastTest?.exitIpv4" class="font-mono text-cp-xs" :title="`IPv4: ${row.lastTest.exitIpv4}`">
+                {{ row.lastTest.exitIpv4 }}
+              </div>
+              <div v-else-if="row.lastTest?.exitIpv6" class="font-mono text-cp-xs" :title="`IPv6: ${row.lastTest.exitIpv6}`">
+                {{ row.lastTest.exitIpv6 }}
+              </div>
+              <span v-else-if="row.lastTest?.exitIp" class="break-all font-mono text-cp-xs">{{ row.lastTest.exitIp }}</span>
+              <span v-else class="text-cp-text-quaternary">-</span>
             </template>
             <template #latency="{ row }">
               <span v-if="testingIds.has(row.id)" class="text-cp-text-secondary">测试中</span>
