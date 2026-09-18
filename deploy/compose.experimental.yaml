@@ -1,0 +1,19 @@
+# 需与 compose.yaml 叠加使用；配置和数据必须放在独立的实验版目录。
+name: codex-proxy-rs-session-keepalive
+
+services:
+  postgres:
+    ports: !override
+      - '127.0.0.1:5433:5432'
+  redis:
+    ports: !override
+      - '127.0.0.1:6380:6379'
+  codex-proxy-rs:
+    image: ${CPR_EXPERIMENTAL_IMAGE:?请设置构建摘要中的实验镜像地址}
+    build:
+      args:
+        CPR_BUILD_TYPE: experimental
+    ports: !override
+      - '127.0.0.1:8081:8080'
+    environment:
+      CPR_ENABLE_SELF_RESTART: 'false'

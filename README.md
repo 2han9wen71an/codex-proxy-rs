@@ -19,6 +19,10 @@
 > [!NOTE]
 > 本项目提供 Responses API，不支持 `/v1/chat/completions`。接入前请确认客户端支持 Responses 协议。
 
+> [!WARNING]
+> 这是基于 v3.10.0 的会话保活实验分支。安装与维护边界见[实验版部署说明](deploy/experimental.md)。
+> 下方一键安装命令安装稳定版；实验版请使用专用镜像和独立数据目录。
+
 ## 快速开始
 
 使用 Docker Compose 部署版本固定的发布镜像，同时启动 PostgreSQL 和 Redis。
