@@ -132,9 +132,6 @@ watch(section, (value) => {
           重新加载
         </BaseButton>
       </div>
-      <div v-else-if="loading" role="status" class="rounded-cp-card bg-cp-bg-container p-6 text-cp text-cp-text-secondary shadow-cp-card">
-        正在加载设置…
-      </div>
 
       <SettingsAccessSection
         v-if="visited.has('access')"
