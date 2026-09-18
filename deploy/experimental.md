@@ -19,7 +19,7 @@
 安装包包含后端程序和管理端静态资源；镜像使用多架构标签，例如：
 
 ```text
-ghcr.io/zyycn/codex-proxy-rs:3.10.0-codex-anti-degradation.1
+ghcr.io/zyycn/codex-proxy-rs:3.10.0-exp.1
 ```
 
 所有平台构建类型均为 `experimental`，禁用应用内一键更新；更新时手动选择指定预发行版本。
@@ -28,12 +28,12 @@ ghcr.io/zyycn/codex-proxy-rs:3.10.0-codex-anti-degradation.1
 ## Docker 独立部署
 
 必须使用独立安装目录、配置、PostgreSQL、Redis 与数据目录，不能与稳定版共用数据库或 `.runtime/`。
-从指定预发行页面下载部署文件；以下示例安装第一个实验版本：
+从指定预发行页面下载部署文件；以下示例安装 v3.10.0-exp.1：
 
 ```bash
 mkdir -p codex-proxy-rs-codex-anti-degradation/deploy
 cd codex-proxy-rs-codex-anti-degradation
-export CPR_RELEASE_TAG='v3.10.0-codex-anti-degradation.1'
+export CPR_RELEASE_TAG='v3.10.0-exp.1'
 curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/compose.yaml" -o deploy/compose.yaml
 curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/config.example.yaml" -o deploy/config.example.yaml
 curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/checksums.txt" -o deploy/checksums.txt
@@ -78,13 +78,10 @@ docker compose -f deploy/compose.yaml up -d --no-build --wait
 
 按需挑选主分支修复，重新检查迁移编号、数据合同与实验功能；不要把整个实验分支合回 `main`。
 发布新版本时，在实验分支维护 `release/notes.md`，使用现有 `release/publish <版本>` 入口，
-版本采用 `3.10.0-codex-anti-degradation.N` 形式。发布流程会识别为实验构建和 GitHub Pre-release。
+后续版本采用 `3.10.0-exp.N` 形式，`N` 从 1 开始递增；只有实际同步新的正式版基线后，才调整前面的版本号。
+现有已发布版本保留原标签、镜像与附件名称。
 
-若已有标签对应的源码版本仍为稳定版基线、并已创建且审核实验发行草稿，可用草稿 ID 补齐同一提交的全部产物：
-
-```bash
-gh workflow run release.yml --ref experimental/codex-anti-degradation \
-  -f tag=v3.10.0-codex-anti-degradation.1 -f draft_release_id=<已审核的草稿ID>
-```
-
-流程校验草稿与标签提交一致，构建期间冻结已审核文案，全部检查通过后上传产物并公开该预发行页面。
+发布流程识别为实验构建和 GitHub Pre-release，全部检查通过后发布完整平台产物。
+正文包含实验说明、本次变化、安装与使用、使用须知、反馈与致谢；工作流保留完整文案，
+不重复追加安装章节或正式版基线的提交列表。发布准备、授权和验收按 [release 技能](../.agents/skills/release/SKILL.md)
+及其[实验版流程](../.agents/skills/release/references/experimental.md)执行。

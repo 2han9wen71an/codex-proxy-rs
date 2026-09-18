@@ -201,7 +201,8 @@ jobs:
             .max_by(&:first)
             &.last
 
-          puts "build_type=#{version.include?("-codex-anti-degradation.") ? "experimental" : "release"}"
+          experimental = version.split("+", 2).first.match?(/-(?:exp\.[1-9]\d*|codex-anti-degradation\.[0-9]+)\z/)
+          puts "build_type=#{experimental ? "experimental" : "release"}"
           puts "tag=#{release_tag}"
           puts "version=#{version}"
           # Docker tags forbid "+", so semver build metadata maps to "-" in image tags.
@@ -781,13 +782,12 @@ jobs:
 
           source = Path(os.environ["RUNNER_TEMP"]) / "experimental-notes.md" if os.environ["DRAFT_RELEASE_ID"] else Path("release/notes.md")
           notes = "\n".join(source.read_text().splitlines()[1:]).strip()
-          installation = os.environ["INSTALLATION_NOTES"].strip()
-          if os.environ["BUILD_TYPE"] == "experimental":
-              installation = installation.replace("/deploy/README.md)", "/deploy/experimental.md)")
-              installation = installation.replace("/blob/${{ needs.release-info.outputs.tag }}/", "/blob/experimental/codex-anti-degradation/")
-              installation += "\n\n实验版附件已合并独立项目名与端口配置；使用独立安装目录，管理端默认端口为 8081。二进制部署同时运行多个实例时，也请配置不同的监听端口。"
+          # 实验版在审核文案中完整说明安装与限制，避免自动追加重复章节。
+          if os.environ["BUILD_TYPE"] != "experimental":
+              installation = os.environ["INSTALLATION_NOTES"].strip()
+              notes = f"{notes}\n\n{installation}"
           output = Path(os.environ["RUNNER_TEMP"]) / "release-notes.md"
-          output.write_text(f"{notes}\n\n{installation}\n")
+          output.write_text(f"{notes}\n")
           PY
 
       - name: Publish GitHub Release
@@ -795,7 +795,7 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.release-info.outputs.tag }}
-          generate_release_notes: true
+          generate_release_notes: ${{ needs.release-info.outputs.build_type != 'experimental' }}
           previous_tag: ${{ needs.release-info.outputs.previous_tag }}
           prerelease: ${{ needs.release-info.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.release-info.outputs.prerelease == 'true' && 'false' || 'true' }}
