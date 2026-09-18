@@ -1,16 +1,17 @@
-# 会话保活实验版
+# Codex 降智缓解实验版
 
-`experimental/session-keepalive` 基于 v3.10.0，保留 PR #151 的会话保活、动态代理和相关修复。
+`experimental/codex-anti-degradation` 基于 v3.10.0，用于探索 [#144](https://github.com/zyycn/codex-proxy-rs/issues/144)
+反馈的 Codex 疑似风控与响应质量下降（“降智”）问题。实现沿用 PR #151 的 `X-Codex-Turn-State` 刷新、会话保活和动态代理。
 它独立于 `main`，是否有效取决于上游行为，不承诺长期有效或进入正式版。
 按需维护必要修复，不自动跟随主分支，也不承诺与主版本同步发布；实验失效或无人维护时可以停止构建。
 
 ## 构建与更新
 
-推送实验分支后，[实验工作流](https://github.com/zyycn/codex-proxy-rs/actions/workflows/experimental-session-keepalive.yml)
+推送实验分支后，[实验工作流](https://github.com/zyycn/codex-proxy-rs/actions/workflows/experimental-codex-anti-degradation.yml)
 复用项目质量检查、Dockerfile 和容器验收，通过后推送 Linux amd64 镜像：
 
 ```text
-ghcr.io/zyycn/codex-proxy-rs:experimental-session-keepalive-<完整提交 SHA>
+ghcr.io/zyycn/codex-proxy-rs:experimental-codex-anti-degradation-<完整提交 SHA>
 ```
 
 具体地址见成功运行的 Summary；可进一步固定该镜像 digest。不会写入 `latest`、正式版本标签或 GitHub Release。
@@ -23,8 +24,8 @@ ghcr.io/zyycn/codex-proxy-rs:experimental-session-keepalive-<完整提交 SHA>
 不能在稳定版目录中切换分支后直接启动，也不能让两个版本连接同一个数据库。
 
 ```bash
-git clone --branch experimental/session-keepalive --single-branch   https://github.com/zyycn/codex-proxy-rs.git codex-proxy-rs-session-keepalive
-cd codex-proxy-rs-session-keepalive
+git clone --branch experimental/codex-anti-degradation --single-branch   https://github.com/zyycn/codex-proxy-rs.git codex-proxy-rs-codex-anti-degradation
+cd codex-proxy-rs-codex-anti-degradation
 ```
 
 从工作流 Summary 选择成功构建的完整 SHA，执行 `git checkout <完整提交 SHA>`，使部署文件与镜像对应。
@@ -32,7 +33,7 @@ cd codex-proxy-rs-session-keepalive
 跳过下载正式 Release 部署文件的步骤。
 
 ```bash
-export CPR_EXPERIMENTAL_IMAGE='ghcr.io/zyycn/codex-proxy-rs:experimental-session-keepalive-<完整提交 SHA>'
+export CPR_EXPERIMENTAL_IMAGE='ghcr.io/zyycn/codex-proxy-rs:experimental-codex-anti-degradation-<完整提交 SHA>'
 docker compose -f deploy/compose.yaml -f deploy/compose.experimental.yaml config --quiet
 docker compose -f deploy/compose.yaml -f deploy/compose.experimental.yaml pull
 docker compose -f deploy/compose.yaml -f deploy/compose.experimental.yaml up -d --no-build --wait

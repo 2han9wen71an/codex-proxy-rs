@@ -1,15 +1,15 @@
-name: Experimental Session Keepalive
+name: Experimental Codex Anti-Degradation
 
 on:
   push:
     branches:
-      - experimental/session-keepalive
+      - experimental/codex-anti-degradation
 
 permissions:
   contents: read
 
 concurrency:
-  group: experimental-session-keepalive
+  group: experimental-codex-anti-degradation
   cancel-in-progress: true
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
       packages: write
       security-events: write
     env:
-      CPR_IMAGE: ghcr.io/zyycn/codex-proxy-rs:experimental-session-keepalive-${{ github.sha }}
+      CPR_IMAGE: ghcr.io/zyycn/codex-proxy-rs:experimental-codex-anti-degradation-${{ github.sha }}
       TRIVY_QUIET: 'true'
       TRIVY_SKIP_VERSION_CHECK: 'true'
     steps:
@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(ruby -ryaml -e 'puts YAML.load_file("release/version.yaml").fetch("version").delete_prefix("v")')"
-          echo "version=${version}-session-keepalive.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}-codex-anti-degradation.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Docker Buildx
@@ -60,8 +60,7 @@ jobs:
             container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/Cargo.lock', 'backend/**/Cargo.toml', 'deploy/Dockerfile') }}-
             container-cargo-v1-${{ runner.os }}-${{ runner.arch }}-
 
-      # The GHA layer exporter does not persist RUN --mount=type=cache contents.
-      # Extraction runs before actions/cache saves its directories in post steps.
+      # GHA 层缓存不保留 RUN 的 cache mount；需在 actions/cache 保存目录前提取挂载内容。
       - name: Restore Cargo mounts to BuildKit
         uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
         with:
@@ -94,8 +93,8 @@ jobs:
           no-cache-filters: |
             runtime-base
             runtime
-          cache-from: type=gha,scope=experimental-session-keepalive
-          cache-to: type=gha,mode=max,scope=experimental-session-keepalive
+          cache-from: type=gha,scope=experimental-codex-anti-degradation
+          cache-to: type=gha,mode=max,scope=experimental-codex-anti-degradation
 
       - name: Verify runtime image
         uses: ./.github/actions/verify-container
@@ -117,7 +116,7 @@ jobs:
           set -euo pipefail
           docker push "$CPR_IMAGE"
           {
-            echo '### 会话保活实验构建'
+            echo '### Codex 降智缓解实验构建'
             echo "镜像：\`$CPR_IMAGE\`"
             echo '平台：linux/amd64；使用独立数据目录，手动更新。'
           } >> "$GITHUB_STEP_SUMMARY"

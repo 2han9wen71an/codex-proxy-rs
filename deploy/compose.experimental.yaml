@@ -1,5 +1,5 @@
 # 需与 compose.yaml 叠加使用；配置和数据必须放在独立的实验版目录。
-name: codex-proxy-rs-session-keepalive
+name: codex-proxy-rs-codex-anti-degradation
 
 services:
   postgres:
