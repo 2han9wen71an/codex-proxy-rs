@@ -126,7 +126,7 @@ impl SessionManager {
         }
         let proxy = self
             .policy
-            .load_oam_proxy()
+            .load_session_keepalive_proxy()
             .await
             .map_err(|_| admin_error(ProviderAdminErrorKind::Unavailable, "动态代理配置读取失败"))?
             .ok_or_else(|| {
@@ -166,29 +166,36 @@ impl SessionManager {
         .map_err(|_| admin_error(ProviderAdminErrorKind::Invalid, "请配置有效的重写模型"))?;
         let mut models = Vec::with_capacity(account.session_keepalive_models().len());
         for model in account.session_keepalive_models() {
-            let result =
-                if self.policy.load_oam_proxy().await.ok().flatten().as_ref() != Some(&proxy) {
-                    Err("全局保活已关闭或动态代理已变化，停止本轮重写".to_owned())
-                } else if !account.model_access().allows(model) {
-                    Err("该账号未允许此模型".to_owned())
-                } else if sessions
-                    .retry_after
-                    .lock()
-                    .await
-                    .is_some_and(|deadline| deadline > tokio::time::Instant::now())
-                {
-                    Err("上游要求稍后重试".to_owned())
-                } else {
-                    self.heartbeat_with_retry(
-                        &client,
-                        (&account, &proxy),
-                        authorization.expose_secret(),
-                        &credential.installation_id,
-                        model,
-                        &sessions,
-                    )
-                    .await
-                };
+            let result = if self
+                .policy
+                .load_session_keepalive_proxy()
+                .await
+                .ok()
+                .flatten()
+                .as_ref()
+                != Some(&proxy)
+            {
+                Err("全局保活已关闭或动态代理已变化，停止本轮重写".to_owned())
+            } else if !account.model_access().allows(model) {
+                Err("该账号未允许此模型".to_owned())
+            } else if sessions
+                .retry_after
+                .lock()
+                .await
+                .is_some_and(|deadline| deadline > tokio::time::Instant::now())
+            {
+                Err("上游要求稍后重试".to_owned())
+            } else {
+                self.heartbeat_with_retry(
+                    &client,
+                    (&account, &proxy),
+                    authorization.expose_secret(),
+                    &credential.installation_id,
+                    model,
+                    &sessions,
+                )
+                .await
+            };
             let result = match result {
                 Ok(state) => self
                     .store_refreshed_state(&account, &proxy, &sessions, generation, model, state)
@@ -267,7 +274,14 @@ impl SessionManager {
                         .iter()
                         .any(|selected| selected == model)
                     && current.model_access().allows(model)
-            }) || self.policy.load_oam_proxy().await.ok().flatten().as_ref() != Some(proxy)
+            }) || self
+                .policy
+                .load_session_keepalive_proxy()
+                .await
+                .ok()
+                .flatten()
+                .as_ref()
+                != Some(proxy)
             {
                 return Err("账号或动态代理配置已变化，停止重写重试".to_owned());
             }
@@ -505,7 +519,7 @@ impl SessionManager {
         }
         let current_proxy = self
             .policy
-            .load_oam_proxy()
+            .load_session_keepalive_proxy()
             .await
             .map_err(|_| "运维配置校验失败")?;
         if current_proxy.as_ref() != Some(proxy) {
@@ -517,7 +531,7 @@ impl SessionManager {
         }
         let expire_at = Utc::now().timestamp() + TTL_SECONDS;
         cache.states.insert(
-            cache_key(account.id(), model),
+            model.to_owned(),
             CachedState {
                 state: SessionState {
                     state_value: state,
@@ -544,7 +558,7 @@ impl SessionManager {
             return;
         };
         let cache = sessions.cache.read().await;
-        let Some(cached) = cache.states.get(&cache_key(account.id(), request.model())) else {
+        let Some(cached) = cache.states.get(request.model()) else {
             return;
         };
         if cached.credential_revision != account.revision()
@@ -569,7 +583,10 @@ impl SessionManager {
 
     async fn refresh_cycle(&self) {
         // 总开关关闭时连账号列表也不遍历；手动刷新仍通过同一持久策略检查。
-        if !matches!(self.policy.load_oam_proxy().await, Ok(Some(_))) {
+        if !matches!(
+            self.policy.load_session_keepalive_proxy().await,
+            Ok(Some(_))
+        ) {
             return;
         }
         let Ok(accounts) = self.repository.list_for_provider().await else {
@@ -644,10 +661,6 @@ fn eligible(account: &ProviderAccount) -> bool {
         && account
             .access_token_expires_at()
             .is_none_or(|expires| expires > std::time::SystemTime::now())
-}
-
-fn cache_key(account_id: &ProviderAccountId, model: &str) -> String {
-    format!("{}:{model}", account_id.as_str())
 }
 
 fn admin_error(kind: ProviderAdminErrorKind, message: &'static str) -> ProviderAdminError {

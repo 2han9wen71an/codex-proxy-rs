@@ -9,7 +9,6 @@ use super::TestDatabase;
 
 fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
     RuntimeSettingsUpdate {
-        oam_proxy: None,
         session_keepalive_enabled: None,
         disable_fast: None,
         request_location_enabled: false,
@@ -459,17 +458,6 @@ async fn disable_fast_persists_and_omitted_updates_preserve_the_restriction() {
     database.close().await;
 }
 
-#[test]
-fn legacy_oam_setting_rejects_nonempty_urls_without_disclosing_credentials() {
-    let mut settings = settings_with_margin(3600);
-    settings.oam_proxy = Some("https://test-user:test-secret@proxy.invalid:8181".to_owned());
-    assert!(!format!("{settings:?}").contains("test-secret"));
-    let error = settings.validate().unwrap_err();
-    assert!(!error.to_string().contains("test-secret"));
-    settings.oam_proxy = Some(String::new());
-    settings.validate().unwrap();
-}
-
 #[tokio::test]
 async fn keepalive_requires_tested_dynamic_proxy_and_defaults_off() {
     use gateway_core::provider_ports::ProviderRuntimePolicyPort;
@@ -484,7 +472,13 @@ async fn keepalive_requires_tested_dynamic_proxy_and_defaults_off() {
             .unwrap()
             .session_keepalive_enabled
     );
-    assert!(repository.load_oam_proxy().await.unwrap().is_none());
+    assert!(
+        repository
+            .load_session_keepalive_proxy()
+            .await
+            .unwrap()
+            .is_none()
+    );
     let mut enabled = settings_with_margin(3600);
     enabled.session_keepalive_enabled = Some(true);
     assert!(
@@ -508,7 +502,7 @@ async fn keepalive_requires_tested_dynamic_proxy_and_defaults_off() {
     repository.update_runtime_settings(enabled).await.unwrap();
     assert_eq!(
         repository
-            .load_oam_proxy()
+            .load_session_keepalive_proxy()
             .await
             .unwrap()
             .unwrap()
@@ -528,7 +522,13 @@ async fn keepalive_requires_tested_dynamic_proxy_and_defaults_off() {
         .execute(&database.pool)
         .await
         .unwrap();
-    assert!(repository.load_oam_proxy().await.unwrap().is_none());
+    assert!(
+        repository
+            .load_session_keepalive_proxy()
+            .await
+            .unwrap()
+            .is_none()
+    );
     let mut disabled = settings_with_margin(3600);
     disabled.session_keepalive_enabled = Some(false);
     repository.update_runtime_settings(disabled).await.unwrap();

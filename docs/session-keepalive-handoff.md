@@ -12,7 +12,7 @@
 | 重写诊断与脱敏 | `backend/crates/providers/openai/src/session_manager/diagnostics.rs` |
 | 共用测试请求构造 | `backend/crates/providers/openai/src/transport/request.rs` |
 | 动态代理隔离与测试准入 | Store 的 `postgres/proxies.rs`、`runtime_settings.rs` |
-| 持久化 | `backend/migrations/0017_session_keepalive_controls.sql`、`0018_session_rewrite_model_ids.sql` |
+| 持久化 | `backend/migrations/0016_session_keepalive.sql` |
 | 设置页风险确认 | `frontend/src/views/settings/components/SessionKeepaliveCard.vue` |
 | 动态代理页面 | `frontend/src/views/proxies/` |
 | 账户模型选择与刷新 | `frontend/src/views/accounts/components/AccountSessionModelsField.vue`、`AccountSessionStateModal.vue` |
@@ -66,7 +66,7 @@ Cargo 使用 `RUST_MIN_STACK=16777216 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBU
 
 ## 部署与真实业务验收
 
-1. 应用迁移后，全局功能仍关闭。到代理管理保存一个动态代理并测试；原 `oamProxy` 保留供回退，但不再生效，不会自动转换业务代理。
+1. 应用迁移后，全局功能仍关闭。到代理管理保存一个动态代理并测试。
 2. 在设置页确认风险、开启并保存。为选定的 OpenAI OAuth 账户开启重写，按实际账户目录选择上游模型 ID。
 3. 在账户页手动刷新，核对逐模型结果；失败会自动重试，最终错误通过重写 ID 对应 `session_keepalive` 日志。日志包含 State 与请求/响应字段，其他认证内容脱敏；禁止把真实日志放入提交或公开报告。
 4. 用原客户端验证连续工具调用、原生续写、换号重试、HTTP 和复用 WS 连接；确认业务继续走原出口、State 能在真实双出口间使用。

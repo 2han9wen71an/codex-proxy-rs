@@ -61,7 +61,6 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 request_id: "request-settings".to_owned(),
             },
             ReplaceRuntimeSettings {
-                oam_proxy: None,
                 session_keepalive_enabled: None,
                 session_keepalive_risk_confirmed: false,
                 disable_fast: None,
@@ -119,7 +118,6 @@ async fn settings_should_require_keepalive_risk_ack_before_store_call() {
                 request_id: "request-settings".to_owned(),
             },
             ReplaceRuntimeSettings {
-                oam_proxy: None,
                 session_keepalive_enabled: Some(true),
                 session_keepalive_risk_confirmed: false,
                 disable_fast: None,

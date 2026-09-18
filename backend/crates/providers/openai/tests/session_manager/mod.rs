@@ -47,7 +47,9 @@ impl ProviderRuntimePolicyPort for Policy {
             ProviderRefreshPolicy::try_new(Duration::from_secs(60), NonZeroU32::new(2).unwrap())
         })
     }
-    fn load_oam_proxy(&self) -> BoxFuture<'_, Result<Option<OutboundProxy>, ProviderStoreError>> {
+    fn load_session_keepalive_proxy(
+        &self,
+    ) -> BoxFuture<'_, Result<Option<OutboundProxy>, ProviderStoreError>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         let proxy = self.proxy.lock().unwrap().clone();
         Box::pin(async move { Ok(proxy) })

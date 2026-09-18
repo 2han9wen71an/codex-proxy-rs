@@ -955,7 +955,7 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 `sessionKeepaliveEnabled` 默认 false，更新省略或 null 保留；提交 true 时必须同时提交 `sessionKeepaliveRiskConfirmed: true`，且代理管理中存在测试通过的唯一动态代理，否则拒绝。确认字段仅用于本次操作，不持久化也不返回。关闭全局开关停止新请求的 State 覆盖及后续重写；账号选择保留。
 
-重写出口在代理管理中以 `isDynamic` 配置。旧 `oamProxy` 保留兼容读取但不再生效，更新仅接受空值或省略，非空更新返回错误，引导使用代理管理。迁移与模型精确匹配要求见 [设计说明](session-keepalive-design.md)。
+重写出口在代理管理中以 `isDynamic` 配置。迁移与模型精确匹配要求见 [设计说明](session-keepalive-design.md)。
 
 | 方法 | 路由 | 说明 |
 | --- | --- | --- |

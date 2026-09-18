@@ -928,7 +928,7 @@ fn invalid_refresh_policy(operation: &'static str) -> ProviderStoreError {
 
 pub trait ProviderRuntimePolicyPort: Send + Sync {
     /// 独立运维出口；未配置时禁止重写回退到业务代理或直连。
-    fn load_oam_proxy(
+    fn load_session_keepalive_proxy(
         &self,
     ) -> BoxFuture<'_, Result<Option<crate::account::OutboundProxy>, ProviderStoreError>> {
         Box::pin(async { Ok(None) })

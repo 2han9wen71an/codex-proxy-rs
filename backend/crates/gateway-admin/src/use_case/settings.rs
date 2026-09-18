@@ -74,13 +74,6 @@ impl SettingsService for DefaultSettingsService {
                 "请先确认会话保活可能导致账户异常的风险",
             ));
         }
-        if command
-            .oam_proxy
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
-        {
-            return Err(AdminError::invalid("请在代理管理中配置并测试动态代理"));
-        }
         let enabling_keepalive = command.session_keepalive_enabled == Some(true);
         let settings = self
             .store
@@ -139,9 +132,7 @@ impl SettingsService for DefaultSettingsService {
 }
 
 fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError> {
-    let valid = command.oam_proxy.as_deref().is_none_or(|value| {
-        value.is_empty() || gateway_core::account::OutboundProxy::parse(value).is_ok()
-    }) && command.request_location.validate().is_ok()
+    let valid = command.request_location.validate().is_ok()
         && command.responses_max_decompressed_body_bytes > 0
         && isize::try_from(command.responses_max_decompressed_body_bytes).is_ok()
         && command.refresh_margin_seconds > 0
