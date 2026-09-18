@@ -478,6 +478,7 @@ async fn usage_not_found_should_preserve_status_without_a_nonofficial_fallback()
         .await;
 
     let error = client(&server.uri())
+        .with_official_base_url(server.uri())
         .fetch_usage(context())
         .await
         .expect_err("usage 404");
@@ -633,7 +634,7 @@ async fn fetch_usage_should_fallback_to_official_endpoint_when_custom_upstream_r
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
+        .and(path("/backend-api/wham/usage"))
         .respond_with(
             ResponseTemplate::new(StatusCode::OK)
                 .set_body_json(serde_json::json!({"rate_limit": {"limit": 100}})),
@@ -642,7 +643,8 @@ async fn fetch_usage_should_fallback_to_official_endpoint_when_custom_upstream_r
         .mount(&official_server)
         .await;
 
-    let test_client = client(&custom_server.uri()).with_official_base_url(official_server.uri());
+    let test_client = client(&custom_server.uri())
+        .with_official_base_url(format!("{}/backend-api", official_server.uri()));
     let usage = test_client
         .fetch_usage(context())
         .await
@@ -678,28 +680,6 @@ async fn fetch_usage_should_not_fallback_when_error_is_not_404() {
         panic!("expected upstream error");
     };
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn fetch_usage_should_not_fallback_when_already_official_base() {
-    let official_server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/api/codex/usage"))
-        .respond_with(ResponseTemplate::new(StatusCode::NOT_FOUND))
-        .expect(1)
-        .mount(&official_server)
-        .await;
-
-    let test_client = client(&official_server.uri()).with_official_base_url(official_server.uri());
-    let error = test_client
-        .fetch_usage(context())
-        .await
-        .expect_err("should return 404");
-    let CodexClientError::Upstream { status, .. } = error else {
-        panic!("expected upstream error");
-    };
-    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 fn assert_oversized_error(

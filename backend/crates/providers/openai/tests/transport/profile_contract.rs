@@ -136,8 +136,7 @@ fn residency_is_explicit_and_survives_artifact_updates() {
 }
 
 #[tokio::test]
-async fn fetch_profile_statistics_should_fallback_to_official_endpoint_when_custom_upstream_returns_404()
- {
+async fn profile_statistics_should_fallback_when_custom_upstream_returns_404() {
     let custom_server = MockServer::start().await;
     let official_server = MockServer::start().await;
 

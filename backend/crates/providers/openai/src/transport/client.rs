@@ -674,15 +674,32 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    /// 覆盖官方账号接口基址，用于隔离上游联调与协议测试。
     #[must_use]
     pub fn with_official_base_url(mut self, official_base_url: impl Into<String>) -> Self {
         self.official_base_url = official_base_url.into().trim_end_matches('/').to_string();
         self
     }
 
-    pub(crate) fn is_custom_upstream_not_found<T>(&self, result: &CodexClientResult<T>) -> bool {
-        matches!(result, Err(CodexClientError::Upstream { status, .. }) if *status == reqwest::StatusCode::NOT_FOUND)
-            && self.base_url.trim_end_matches('/') != self.official_base_url.trim_end_matches('/')
+    /// 自定义账号路由明确不存在时才回退一次；调用方继续解释最后一次响应。
+    pub(super) async fn send_account_request(
+        &self,
+        request: reqwest::RequestBuilder,
+        fallback: reqwest::RequestBuilder,
+    ) -> CodexClientResult<ReqwestResponse> {
+        let response = request.send().await.map_err(CodexClientError::HttpJson)?;
+        if response.status() != StatusCode::NOT_FOUND
+            || self.base_url.trim_end_matches('/') == self.official_base_url.trim_end_matches('/')
+        {
+            return Ok(response);
+        }
+        tracing::debug!(
+            endpoint = response.url().path(),
+            "custom account endpoint returned 404; falling back to official endpoint"
+        );
+        drop(response);
+        // 消费可能已在回退端完成，传输失败不能被先前的 404 覆盖。
+        fallback.send().await.map_err(CodexClientError::HttpJson)
     }
 
     pub(crate) fn with_authentication(
