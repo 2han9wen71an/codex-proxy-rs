@@ -7,6 +7,11 @@ on:
         description: 'Tag to release, for example v0.1.0'
         required: true
         type: string
+      draft_release_id:
+        description: Approved experimental draft to complete for an existing tag
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -35,6 +40,7 @@ jobs:
       docker_platforms: ${{ steps.version.outputs.docker_platforms }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      build_type: ${{ steps.version.outputs.build_type }}
 
     steps:
       - name: Checkout
@@ -43,11 +49,47 @@ jobs:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
 
+      - name: Load approved experimental draft
+        if: inputs.draft_release_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ inputs.draft_release_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > "$RUNNER_TEMP/experimental-release.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          release = json.loads((Path(os.environ["RUNNER_TEMP"]) / "experimental-release.json").read_text())
+          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if not release["draft"] or not release["prerelease"] or release["target_commitish"] != sha:
+              raise SystemExit("expected an approved prerelease draft for the exact tag commit")
+          notes = release["body"]
+          if not notes.startswith(f"# {os.environ['RELEASE_TAG']}\n"):
+              raise SystemExit("draft notes do not match the requested version")
+          (Path(os.environ["RUNNER_TEMP"]) / "experimental-notes.md").write_text(notes)
+          PY
+
+      - name: Save approved experimental notes
+        if: inputs.draft_release_id != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: approved-experimental-notes
+          path: ${{ runner.temp }}/experimental-notes.md
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Read release metadata
         id: version
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
         run: |
           ruby <<'RUBY' >> "$GITHUB_OUTPUT"
           require "json"
@@ -85,10 +127,17 @@ jobs:
           tag_prefix = "v"
           expected_tag = "#{tag_prefix}#{version}"
           release_tag = ENV.fetch("RELEASE_TAG")
+          notes_path = "release/notes.md"
+          # 已建实验标签的补充发行保持源码不变，使用维护者审核过的草稿文案。
+          unless ENV.fetch("DRAFT_RELEASE_ID").empty?
+            pattern = /\Av#{Regexp.escape(version)}-codex-anti-degradation\.[0-9]+\z/
+            fail("draft completion requires an experimental tag based on #{version}") unless release_tag.match?(pattern)
+            version = release_tag.delete_prefix("v")
+            expected_tag = release_tag
+            notes_path = File.join(ENV.fetch("RUNNER_TEMP"), "experimental-notes.md")
+          end
           fail("Release tag #{release_tag} does not match #{version_path} tag #{expected_tag}") unless release_tag == expected_tag
           fail("#{version_path}: version #{version} is not a valid semver") unless version.match?(SEMVER)
-
-          notes_path = "release/notes.md"
           fail("#{notes_path}: release notes are required") unless File.file?(notes_path)
           notes = File.readlines(notes_path)
           unless notes.first&.strip == "# #{release_tag}" && !notes.drop(1).join.strip.empty?
@@ -149,6 +198,7 @@ jobs:
             .max_by(&:first)
             &.last
 
+          puts "build_type=#{version.include?("-codex-anti-degradation.") ? "experimental" : "release"}"
           puts "tag=#{release_tag}"
           puts "version=#{version}"
           # Docker tags forbid "+", so semver build metadata maps to "-" in image tags.
@@ -221,7 +271,7 @@ jobs:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
-          CPR_BUILD_TYPE: release
+          CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -274,7 +324,7 @@ jobs:
           CPR_VERSION: ${{ needs.release-info.outputs.version }}
           CPR_GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
           CPR_BUILD_TIME: ${{ needs.release-info.outputs.build_time }}
-          CPR_BUILD_TYPE: release
+          CPR_BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -316,6 +366,7 @@ jobs:
         env:
           VERSION: ${{ needs.release-info.outputs.version }}
           DOCKER_VERSION: ${{ needs.release-info.outputs.docker_version }}
+          BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
         run: |
           set -euo pipefail
           ruby <<'RUBY' > release-platforms.json
@@ -323,6 +374,29 @@ jobs:
           require "yaml"
 
           print JSON.generate(YAML.load_file("release/platforms.yaml"))
+          # 实验版附件合并隔离配置，仍提供与正式版相同的单份 compose.yaml。
+          compose = YAML.load_file("deploy/compose.yaml", aliases: true)
+          if ENV.fetch("BUILD_TYPE") == "experimental"
+            overlay = YAML.load_file("deploy/compose.experimental.yaml", aliases: true)
+            compose["name"] = overlay.fetch("name")
+            overlay.fetch("services").each do |name, overrides|
+              service = compose.fetch("services").fetch(name)
+              overrides.each do |key, value|
+                case key
+                when "image"
+                  # 镜像由打包步骤固定到本次版本。
+                  next
+                when "build"
+                  service.fetch("build").fetch("args").merge!(value.fetch("args"))
+                when "environment"
+                  service.fetch("environment").merge!(value)
+                else
+                  service[key] = value
+                end
+              end
+            end
+          end
+          File.write("release-compose.yaml", YAML.dump(compose))
           RUBY
           python3 - <<'PY'
           import hashlib
@@ -352,7 +426,7 @@ jobs:
           release_dir.mkdir(parents=True)
           config_template = pathlib.Path("deploy/config.example.yaml")
           shutil.copy2(config_template, release_dir / config_template.name)
-          compose = pathlib.Path("deploy/compose.yaml").read_text()
+          compose = pathlib.Path("release-compose.yaml").read_text()
           image = f"{os.environ['REGISTRY']}/{os.environ['IMAGE_NAME']}"
           default_image = "${CPR_IMAGE:-" + image + ":latest}"
           if compose.count(default_image) != 1:
@@ -665,9 +739,18 @@ jobs:
 
           cosign sign --yes "${images[@]}"
 
+      - name: Download approved experimental notes
+        if: inputs.draft_release_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: approved-experimental-notes
+          path: ${{ runner.temp }}
+
       - name: Prepare release notes
         shell: bash
         env:
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
+          BUILD_TYPE: ${{ needs.release-info.outputs.build_type }}
           INSTALLATION_NOTES: |
             ## 📥 安装
 
@@ -693,13 +776,19 @@ jobs:
           import os
           from pathlib import Path
 
-          notes = "\n".join(Path("release/notes.md").read_text().splitlines()[1:]).strip()
+          source = Path(os.environ["RUNNER_TEMP"]) / "experimental-notes.md" if os.environ["DRAFT_RELEASE_ID"] else Path("release/notes.md")
+          notes = "\n".join(source.read_text().splitlines()[1:]).strip()
           installation = os.environ["INSTALLATION_NOTES"].strip()
+          if os.environ["BUILD_TYPE"] == "experimental":
+              installation = installation.replace("/deploy/README.md)", "/deploy/experimental.md)")
+              installation = installation.replace("/blob/${{ needs.release-info.outputs.tag }}/", "/blob/experimental/codex-anti-degradation/")
+              installation += "\n\n实验版附件已合并独立项目名与端口配置；使用独立安装目录，管理端默认端口为 8081。二进制部署同时运行多个实例时，也请配置不同的监听端口。"
           output = Path(os.environ["RUNNER_TEMP"]) / "release-notes.md"
           output.write_text(f"{notes}\n\n{installation}\n")
           PY
 
       - name: Publish GitHub Release
+        if: inputs.draft_release_id == ''
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.release-info.outputs.tag }}
@@ -711,3 +800,43 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/release/*
+
+      - name: Complete approved experimental draft
+        if: inputs.draft_release_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ inputs.draft_release_id }}
+          RELEASE_TAG: ${{ needs.release-info.outputs.tag }}
+          GIT_SHA: ${{ needs.release-info.outputs.git_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          from urllib.parse import quote
+
+          endpoint = f"repos/{os.environ['GITHUB_REPOSITORY']}/releases/{os.environ['RELEASE_ID']}"
+          release = json.loads(subprocess.check_output(["gh", "api", endpoint], text=True))
+          approved = (Path(os.environ["RUNNER_TEMP"]) / "experimental-notes.md").read_text()
+          if not release["draft"] or not release["prerelease"] or release["target_commitish"] != os.environ["GIT_SHA"] or release["body"].strip() != approved.strip():
+              raise SystemExit("release draft changed after build started; inspect before publishing")
+          existing = {asset["name"]: asset["id"] for asset in release["assets"]}
+          for asset in sorted(Path("dist/release").iterdir()):
+              if asset.name in existing:
+                  subprocess.run(["gh", "api", "--method", "DELETE", f"repos/{os.environ['GITHUB_REPOSITORY']}/releases/assets/{existing[asset.name]}"], check=True)
+              upload_url = release["upload_url"].split("{")[0] + "?name=" + quote(asset.name)
+              subprocess.run(["gh", "api", "--method", "POST", upload_url, "-H", "Content-Type: application/octet-stream", "--input", str(asset)], check=True, stdout=subprocess.DEVNULL)
+          payload = {
+              "tag_name": os.environ["RELEASE_TAG"],
+              "target_commitish": os.environ["GIT_SHA"],
+              "body": (Path(os.environ["RUNNER_TEMP"]) / "release-notes.md").read_text(),
+              "draft": False,
+              "prerelease": True,
+              "make_latest": "false",
+          }
+          result = subprocess.run(["gh", "api", "--method", "PATCH", endpoint, "--input", "-"], input=json.dumps(payload), text=True, capture_output=True, check=True)
+          print(json.loads(result.stdout)["html_url"])
+          PY

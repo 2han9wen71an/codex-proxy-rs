@@ -2,51 +2,71 @@
 
 `experimental/codex-anti-degradation` 基于 v3.10.0，用于探索 [#144](https://github.com/zyycn/codex-proxy-rs/issues/144)
 反馈的 Codex 疑似风控与响应质量下降（“降智”）问题。实现沿用 PR #151 的 `X-Codex-Turn-State` 刷新、会话保活和动态代理。
-它独立于 `main`，是否有效取决于上游行为，不承诺长期有效或进入正式版。
-按需维护必要修复，不自动跟随主分支，也不承诺与主版本同步发布；实验失效或无人维护时可以停止构建。
+它独立于 `main`，效果取决于上游行为，不承诺长期有效或进入正式版。
+按需维护必要修复，不自动跟随主分支，也不承诺与主版本同步发布。
 
-## 构建与更新
+## 发布产物
 
-推送实验分支后，[实验工作流](https://github.com/zyycn/codex-proxy-rs/actions/workflows/experimental-codex-anti-degradation.yml)
-复用项目质量检查、Dockerfile 和容器验收，通过后推送 Linux amd64 镜像：
+实验版复用项目完整发布流程，平台清单与正式版一致：
+
+| 平台 | 安装包 | Docker 镜像 |
+| --- | --- | --- |
+| Linux amd64 | tar.gz | 支持 |
+| Linux arm64 | tar.gz | 支持 |
+| macOS arm64 | tar.gz | — |
+
+预发行页面同时提供 `compose.yaml`、`config.example.yaml`、`checksums.txt`。
+安装包包含后端程序和管理端静态资源；镜像使用多架构标签，例如：
 
 ```text
-ghcr.io/zyycn/codex-proxy-rs:experimental-codex-anti-degradation-<完整提交 SHA>
+ghcr.io/zyycn/codex-proxy-rs:3.10.0-codex-anti-degradation.1
 ```
 
-具体地址见成功运行的 Summary；可进一步固定该镜像 digest。不会写入 `latest`、正式版本标签或 GitHub Release。
-构建类型为 `experimental`，禁用应用内一键更新；更新时手动选择成功构建的镜像并重新执行下方部署命令。
-源码自建也必须设置 `CPR_BUILD_TYPE=experimental`，避免误切稳定版更新。
+所有平台构建类型均为 `experimental`，禁用应用内一键更新；更新时手动选择指定预发行版本。
+实验发行不会更新稳定版 `latest`。推送分支执行质量检查，发布时再统一构建全部平台产物。
 
-## 独立部署
+## Docker 独立部署
 
-需要 Docker Compose 2.24.4 或更新版本。必须使用独立安装目录、配置、PostgreSQL、Redis 与数据目录，
-不能在稳定版目录中切换分支后直接启动，也不能让两个版本连接同一个数据库。
+必须使用独立安装目录、配置、PostgreSQL、Redis 与数据目录，不能与稳定版共用数据库或 `.runtime/`。
+从指定预发行页面下载部署文件；以下示例安装第一个实验版本：
 
 ```bash
-git clone --branch experimental/codex-anti-degradation --single-branch   https://github.com/zyycn/codex-proxy-rs.git codex-proxy-rs-codex-anti-degradation
+mkdir -p codex-proxy-rs-codex-anti-degradation/deploy
 cd codex-proxy-rs-codex-anti-degradation
+export CPR_RELEASE_TAG='v3.10.0-codex-anti-degradation.1'
+curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/compose.yaml" -o deploy/compose.yaml
+curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/config.example.yaml" -o deploy/config.example.yaml
+curl -fsSL "https://github.com/zyycn/codex-proxy-rs/releases/download/${CPR_RELEASE_TAG}/checksums.txt" -o deploy/checksums.txt
+(cd deploy && sha256sum --check --ignore-missing checksums.txt)
 ```
 
-从工作流 Summary 选择成功构建的完整 SHA，执行 `git checkout <完整提交 SHA>`，使部署文件与镜像对应。
-按照[手动安装](README.md#手动安装)创建 `.runtime` 目录、从当前分支的 `deploy/config.example.yaml` 创建配置并填写密码；
-跳过下载正式 Release 部署文件的步骤。
+按照[手动安装](README.md#手动安装)创建 `.runtime` 目录、从当前版本的 `config.example.yaml` 创建配置并填写密码；
+跳过下载正式版部署文件的步骤。然后启动：
 
 ```bash
-export CPR_EXPERIMENTAL_IMAGE='ghcr.io/zyycn/codex-proxy-rs:experimental-codex-anti-degradation-<完整提交 SHA>'
-docker compose -f deploy/compose.yaml -f deploy/compose.experimental.yaml config --quiet
-docker compose -f deploy/compose.yaml -f deploy/compose.experimental.yaml pull
-docker compose -f deploy/compose.yaml -f deploy/compose.experimental.yaml up -d --no-build --wait
+docker compose -f deploy/compose.yaml config --quiet
+docker compose -f deploy/compose.yaml pull
+docker compose -f deploy/compose.yaml up -d --no-build --wait
 ```
 
-管理端为 `http://127.0.0.1:8081`；数据库和 Redis 宿主端口分别为 `5433`、`6380`，容器内部连接无需修改。
-实验覆盖文件使用单独的 Compose 项目名，绑定目录仍位于当前克隆的 `.runtime/`，不要改为稳定版目录。
-所有后续 Compose 操作都应传入这两个文件与同一个镜像变量。
-保活默认关闭，使用方法与边界见[功能说明](../docs/session-keepalive-design.md)。
+实验发行附件已经合并隔离配置，使用独立 Compose 项目名，管理端为 `http://127.0.0.1:8081`，
+数据库和 Redis 宿主端口分别为 `5433`、`6380`。镜像已固定到本次版本，不需要额外覆盖文件或镜像环境变量。
+
+源码克隆中的 `deploy/compose.yaml` 仍是基础模板；源码部署需要与 `deploy/compose.experimental.yaml` 叠加，
+设置 `CPR_EXPERIMENTAL_IMAGE` 为指定实验镜像。覆盖文件需要 Docker Compose 2.24.4 或更新版本。
+
+## 二进制独立部署
+
+下载与操作系统、架构对应的 `codex-proxy-rs_<版本>_<系统>_<架构>.tar.gz`，使用同一 Release 的 `checksums.txt` 校验，
+解压到独立目录。从随包 `deploy/config.example.yaml` 创建配置，连接独立 PostgreSQL 和 Redis。
+按照[部署与升级说明](README.md#镜像升级与源码构建)将 `api.asset_directory` 设置为 `../web/dist`，使用归档内的管理端资源。
+同机同时运行稳定版时，为实验实例配置不同的监听端口。
+
+功能默认关闭，配置方式与边界见[功能说明](../docs/session-keepalive-design.md)。
 
 ## 数据与回退
 
-本分支只保留一份新增 SQL：`0016_session_keepalive.sql`。稳定版目前使用 0001–0015；
+本分支只保留一份新增 SQL：`0016_session_keepalive.sql`。稳定版基线 v3.10.0 使用 0001–0015；
 实验库不能原地降级到稳定版，也不能随意合并主分支未来同编号迁移。
 已经运行过 PR #151 原始 0016–0018 或旧版合并 0016 的源码实例，需要完整备份后重建与目标代码匹配的库，
 并按目标表结构恢复业务数据；不要修改 `_sqlx_migrations` 的 checksum。
@@ -54,4 +74,17 @@ docker compose -f deploy/compose.yaml -f deploy/compose.experimental.yaml up -d 
 首次试用优先新建空库，通过管理端导入所需账号。回到稳定版时停止实验实例，使用原稳定版实例或其试用前备份。
 需要迁移试用期间新增数据时，单独导出业务数据并核对字段，不直接把实验库备份还原给稳定版。
 
-维护时按需挑选主分支修复，重新检查迁移编号、数据合同与实验功能；不要把整个实验分支合回 `main`。
+## 维护与发布
+
+按需挑选主分支修复，重新检查迁移编号、数据合同与实验功能；不要把整个实验分支合回 `main`。
+发布新版本时，在实验分支维护 `release/notes.md`，使用现有 `release/publish <版本>` 入口，
+版本采用 `3.10.0-codex-anti-degradation.N` 形式。发布流程会识别为实验构建和 GitHub Pre-release。
+
+若已有标签对应的源码版本仍为稳定版基线、并已创建且审核实验发行草稿，可用草稿 ID 补齐同一提交的全部产物：
+
+```bash
+gh workflow run release.yml --ref experimental/codex-anti-degradation \
+  -f tag=v3.10.0-codex-anti-degradation.1 -f draft_release_id=<已审核的草稿ID>
+```
+
+流程校验草稿与标签提交一致，构建期间冻结已审核文案，全部检查通过后上传产物并公开该预发行页面。
