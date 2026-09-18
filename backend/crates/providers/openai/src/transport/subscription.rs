@@ -25,11 +25,30 @@ impl CodexBackendClient {
         context: CodexRequestContext<'_>,
         account_id: &str,
     ) -> Option<CodexSubscription> {
+        let result = self
+            .fetch_subscription_at_base(&self.base_url, context, account_id)
+            .await;
+        if result.is_none()
+            && self.base_url.trim_end_matches('/') != self.official_base_url.trim_end_matches('/')
+        {
+            return self
+                .fetch_subscription_at_base(&self.official_base_url, context, account_id)
+                .await;
+        }
+        result
+    }
+
+    async fn fetch_subscription_at_base(
+        &self,
+        base_url: &str,
+        context: CodexRequestContext<'_>,
+        account_id: &str,
+    ) -> Option<CodexSubscription> {
         if account_id.is_empty() || account_id.len() > 512 {
             return None;
         }
         tokio::time::timeout(Duration::from_secs(5), async {
-            let mut url = reqwest::Url::parse(&self.base_url).ok()?;
+            let mut url = reqwest::Url::parse(base_url).ok()?;
             let base_path = url.path().trim_end_matches('/');
             let subscription_path = if base_path.ends_with("/backend-api") {
                 format!("{base_path}/subscriptions")

@@ -85,12 +85,33 @@ impl CodexBackendClient {
         &self,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexRateLimitResetCredits> {
+        let result = self
+            .list_rate_limit_reset_credits_at_base(&self.base_url, context)
+            .await;
+        if self.is_custom_upstream_not_found(&result) {
+            tracing::info!(
+                upstream_base_url = %self.base_url,
+                official_base_url = %self.official_base_url,
+                "custom upstream returned 404 for rate-limit-reset-credits endpoint; falling back to official endpoint"
+            );
+            if let Ok(fallback) = self
+                .list_rate_limit_reset_credits_at_base(&self.official_base_url, context)
+                .await
+            {
+                return Ok(fallback);
+            }
+        }
+        result
+    }
+
+    async fn list_rate_limit_reset_credits_at_base(
+        &self,
+        base_url: &str,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexRateLimitResetCredits> {
         let response = self
             .client
-            .get(account_endpoint_url(
-                &self.base_url,
-                "rate-limit-reset-credits",
-            ))
+            .get(account_endpoint_url(base_url, "rate-limit-reset-credits"))
             .headers(self.account_request_headers(context)?)
             .send()
             .await
@@ -122,10 +143,46 @@ impl CodexBackendClient {
         credit_id: Option<&str>,
         redeem_request_id: Uuid,
     ) -> CodexClientResult<CodexRateLimitResetCreditsConsumeResult> {
+        let result = self
+            .consume_rate_limit_reset_credit_at_base(
+                &self.base_url,
+                context,
+                credit_id,
+                redeem_request_id,
+            )
+            .await;
+        if self.is_custom_upstream_not_found(&result) {
+            tracing::info!(
+                upstream_base_url = %self.base_url,
+                official_base_url = %self.official_base_url,
+                "custom upstream returned 404 for rate-limit-reset-credits/consume endpoint; falling back to official endpoint"
+            );
+            if let Ok(fallback) = self
+                .consume_rate_limit_reset_credit_at_base(
+                    &self.official_base_url,
+                    context,
+                    credit_id,
+                    redeem_request_id,
+                )
+                .await
+            {
+                return Ok(fallback);
+            }
+        }
+        result
+    }
+
+    async fn consume_rate_limit_reset_credit_at_base(
+        &self,
+        base_url: &str,
+        context: CodexRequestContext<'_>,
+        credit_id: Option<&str>,
+        redeem_request_id: Uuid,
+    ) -> CodexClientResult<CodexRateLimitResetCreditsConsumeResult> {
         let response = self
             .client
             .post(account_endpoint_url(
-                &self.base_url,
+                base_url,
                 "rate-limit-reset-credits/consume",
             ))
             .headers(self.account_request_headers(context)?)

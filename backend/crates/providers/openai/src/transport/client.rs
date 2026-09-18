@@ -663,6 +663,7 @@ pub struct CodexBackendClient {
     pub(super) client: Client,
     pub(super) direct_client: Client,
     pub(super) base_url: String,
+    pub(super) official_base_url: String,
     pub(super) protocol: OpenAiUpstreamProtocol,
     pub(super) profile: CodexWireProfileState,
     pub(super) websocket_pool: Option<Arc<CodexWebSocketPool>>,
@@ -673,6 +674,17 @@ pub struct CodexBackendClient {
 }
 
 impl CodexBackendClient {
+    #[must_use]
+    pub fn with_official_base_url(mut self, official_base_url: impl Into<String>) -> Self {
+        self.official_base_url = official_base_url.into().trim_end_matches('/').to_string();
+        self
+    }
+
+    pub(crate) fn is_custom_upstream_not_found<T>(&self, result: &CodexClientResult<T>) -> bool {
+        matches!(result, Err(CodexClientError::Upstream { status, .. }) if *status == reqwest::StatusCode::NOT_FOUND)
+            && self.base_url.trim_end_matches('/') != self.official_base_url.trim_end_matches('/')
+    }
+
     pub(crate) fn with_authentication(
         mut self,
         authentication: &crate::credential::CodexRuntimeAuthentication,

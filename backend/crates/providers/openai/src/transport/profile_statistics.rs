@@ -165,9 +165,33 @@ impl CodexBackendClient {
         &self,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexProfileStatistics> {
+        let result = self
+            .fetch_profile_statistics_at_base(&self.base_url, context)
+            .await;
+        if self.is_custom_upstream_not_found(&result) {
+            tracing::info!(
+                upstream_base_url = %self.base_url,
+                official_base_url = %self.official_base_url,
+                "custom upstream returned 404 for profile-statistics endpoint; falling back to official endpoint"
+            );
+            if let Ok(fallback) = self
+                .fetch_profile_statistics_at_base(&self.official_base_url, context)
+                .await
+            {
+                return Ok(fallback);
+            }
+        }
+        result
+    }
+
+    async fn fetch_profile_statistics_at_base(
+        &self,
+        base_url: &str,
+        context: CodexRequestContext<'_>,
+    ) -> CodexClientResult<CodexProfileStatistics> {
         let response = self
             .client
-            .get(account_endpoint_url(&self.base_url, "profiles/me"))
+            .get(account_endpoint_url(base_url, "profiles/me"))
             .headers(self.account_request_headers(context)?)
             .send()
             .await?;

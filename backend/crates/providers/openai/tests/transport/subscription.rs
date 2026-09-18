@@ -146,3 +146,37 @@ async fn subscription_preserves_configured_backend_path_prefix() {
             .is_some()
     );
 }
+
+#[tokio::test]
+async fn subscription_should_fallback_to_official_endpoint_when_custom_upstream_fails() {
+    let custom_server = MockServer::start().await;
+    let official_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/subscriptions"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&custom_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/subscriptions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "active_until": "2026-10-01T00:00:00Z"
+        })))
+        .expect(1)
+        .mount(&official_server)
+        .await;
+
+    let test_client = client(&format!("{}/backend-api", custom_server.uri()))
+        .with_official_base_url(format!("{}/backend-api", official_server.uri()));
+
+    let result = test_client
+        .fetch_subscription(
+            CodexRequestContext::auxiliary("Bearer fixture", Some("account"), "req", None),
+            "account",
+        )
+        .await;
+
+    assert!(result.is_some());
+}

@@ -620,6 +620,88 @@ async fn chunked_body_over_limit_should_be_rejected_without_content_length() {
     assert_oversized_error(error, StatusCode::BAD_GATEWAY, None);
 }
 
+#[tokio::test]
+async fn fetch_usage_should_fallback_to_official_endpoint_when_custom_upstream_returns_404() {
+    let custom_server = MockServer::start().await;
+    let official_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(StatusCode::NOT_FOUND))
+        .expect(1)
+        .mount(&custom_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(
+            ResponseTemplate::new(StatusCode::OK)
+                .set_body_json(serde_json::json!({"rate_limit": {"limit": 100}})),
+        )
+        .expect(1)
+        .mount(&official_server)
+        .await;
+
+    let test_client = client(&custom_server.uri()).with_official_base_url(official_server.uri());
+    let usage = test_client
+        .fetch_usage(context())
+        .await
+        .expect("usage after fallback");
+    assert_eq!(usage["rate_limit"]["limit"], 100);
+}
+
+#[tokio::test]
+async fn fetch_usage_should_not_fallback_when_error_is_not_404() {
+    let custom_server = MockServer::start().await;
+    let official_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(StatusCode::UNAUTHORIZED))
+        .expect(1)
+        .mount(&custom_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(StatusCode::OK))
+        .expect(0)
+        .mount(&official_server)
+        .await;
+
+    let test_client = client(&custom_server.uri()).with_official_base_url(official_server.uri());
+    let error = test_client
+        .fetch_usage(context())
+        .await
+        .expect_err("should return 401");
+    let CodexClientError::Upstream { status, .. } = error else {
+        panic!("expected upstream error");
+    };
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn fetch_usage_should_not_fallback_when_already_official_base() {
+    let official_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(StatusCode::NOT_FOUND))
+        .expect(1)
+        .mount(&official_server)
+        .await;
+
+    let test_client = client(&official_server.uri()).with_official_base_url(official_server.uri());
+    let error = test_client
+        .fetch_usage(context())
+        .await
+        .expect_err("should return 404");
+    let CodexClientError::Upstream { status, .. } = error else {
+        panic!("expected upstream error");
+    };
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 fn assert_oversized_error(
     error: CodexClientError,
     expected_status: StatusCode,
