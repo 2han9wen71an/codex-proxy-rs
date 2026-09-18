@@ -24,7 +24,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
 
     async fn sync_pricing(
         &self,
-        prices: gateway_core::metering::PricingOverrides,
+        changes: gateway_admin::model::pricing::PricingSyncChanges,
         context: &MutationContext,
     ) -> AdminStoreResult<gateway_admin::model::Revision> {
         let audit = mutation_audit(
@@ -36,7 +36,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
         );
         let revision = self
             .control_plane
-            .sync_pricing(prices, audit)
+            .sync_pricing(changes, audit)
             .await
             .map_err(|error| admin_store_error("model pricing sync", error))?;
         admin_revision(revision)
@@ -91,7 +91,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 refresh_margin_seconds: command.refresh_margin_seconds,
                 refresh_concurrency: command.refresh_concurrency,
                 max_concurrent_per_account: command.max_concurrent_per_account,
-                disable_fast: command.disable_fast,
                 request_location_enabled: command.request_location_enabled,
                 request_location: command.request_location,
                 request_interval_ms: command.request_interval_ms,
@@ -123,7 +122,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 "1",
                 vec![
                     "provider_request_profiles_json".to_owned(),
-                    "disable_fast".to_owned(),
                     "request_location_enabled".to_owned(),
                     "request_location_json".to_owned(),
                     "model_mappings_json".to_owned(),
@@ -235,7 +233,6 @@ pub(crate) fn admin_runtime_settings(
     Ok(AdminRuntimeSettings {
         openai_client_profile: settings.openai_client_profile,
         config_revision: admin_revision(settings.config_revision)?,
-        disable_fast: settings.disable_fast,
         request_location_enabled: settings.request_location_enabled,
         request_location: settings.request_location,
         model_mappings,

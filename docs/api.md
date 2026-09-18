@@ -267,7 +267,8 @@ OpenAI 明确返回 `server_is_overloaded`、`slow_down` 或模型容量不足�
 尚未交付输出的前提下，先做最多 3 次同账号指数退避，再通过现有调度换号。默认间隔从 500ms 开始，
 上游 `Retry-After` 参与退避计算，单次等待不超过 8 秒；重试同时受请求总尝试次数和截止时间约束。
 `server_is_overloaded`、`slow_down` 等可计分的结构化错误按已发送的失败尝试计入 Smart 账号
-健康分。失败率使用账号级平滑与时间衰减，影响后续普通选路，已有可用账号的
+健康分。已确认容量拒绝的平滑权重为 0.4，其他可计分失败与成功样本保持 0.2。
+失败率使用账号级平滑与时间衰减，影响后续普通选路，已有可用账号的
 会话亲和仍优先。容量不足不触发 Provider 全局熔断，也不作为账号额度耗尽；启用账号自动冻结时，
 达到容量失败阈值会另外写入临时冷却。
 客户端错误兼容由 API 编码出口统一处理：最终交付的 `server_is_overloaded`、`slow_down` 错误码
@@ -857,7 +858,13 @@ PostgreSQL 或 Redis。
 分组是 Provider-neutral 的账号集合；一个组可包含任意 Provider 账号，一个账号也可属于多个组。
 分组详情和列表返回 `disableFast`，创建时省略默认为 `false`，更新时省略或 `null` 保留现值。
 Client Key 绑定的任一分组开启此限制（包括已禁用分组）时，该 Key 的 OpenAI Responses 请求关闭 Fast；
-未绑定分组的 Key 只受全局限制，不按最终所选账号的分组判断。
+未绑定分组的 Key 不限制 Fast，不按最终所选账号的分组判断。
+
+关闭 Fast 只将顶层 `service_tier` 的 `priority`（含 `fast` 别名）改为显式 `default`，继续处理请求；
+不改变 `flex`、`ultrafast`、缺失值、默认档、嵌套字段或其他 Provider。
+HTTP 和每个 WebSocket `response.create` 均使用请求开始时的分组策略，同一请求重试保持该策略；
+HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造；复用 WS 时不重发握手头，
+每个 `response.create` 仍独立应用档位策略，请求档位统计与本地费用估算使用各帧的最终出站档位。
 
 | 方法 | 路由 | 主要 query/body | 说明 |
 | --- | --- | --- | --- |
@@ -971,7 +978,6 @@ HTTP 返回 `429`，`error.code` 为 `key_daily_budget_exceeded` 或 `key_weekly
 
 ```text
 openaiClientProfile
-disableFast
 requestLocationEnabled
 requestLocation
 modelMappings
@@ -997,13 +1003,6 @@ accountAutoFreezeProbeEnabled
 accountAutoFreezeProbeModel
 accountAutoFreezeAdaptiveConcurrency
 ```
-
-`disableFast` 默认 `false`，更新时省略或 `null` 保留现值。全局开启时，所有 Key 的 OpenAI Responses 请求关闭 Fast；
-全局关闭时仍应用 Key 绑定分组的限制。关闭 Fast 只将顶层 `service_tier` 的 `priority`（含 `fast` 别名）
-改为显式 `default`，继续处理请求；不改变 `flex`、`ultrafast`、缺失值、默认档、嵌套字段或其他 Provider。
-HTTP 和每个 WebSocket `response.create` 均使用请求开始时的配置，同一请求重试保持该配置；
-HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造；复用 WS 时不重发握手头，
-每个 `response.create` 仍独立应用档位策略，请求档位统计与本地费用估算使用各帧的最终出站档位。
 
 `requestLocationEnabled` 是必填布尔值，默认 `false`：关闭时不覆盖客户端原有位置和时区；开启时使用已保存的
 `requestLocation`。关闭不会清空自定义值，代理自定义位置仍优先。
@@ -1038,7 +1037,7 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 | `GET` | `/api/admin/settings/pricing` | 返回 `{ defaults, synced, overrides, syncedAt }` |
 | `POST` | `/api/admin/settings/pricing/update` | `{ provider, models, change }`，成功返回 `{ saved: true }` |
 | `POST` | `/api/admin/settings/pricing/sync/preview` | 无 body；返回 `{ prices, skipped }`，不写入配置 |
-| `POST` | `/api/admin/settings/pricing/sync` | 原样提交确认的 `{ prices, skipped }`；成功返回 `{ saved: true }` |
+| `POST` | `/api/admin/settings/pricing/sync` | `{ preview: { prices, skipped }, models: { openai: ["gpt-5.4"] } }`；成功返回 `{ saved: true }` |
 
 价目使用 `Provider → 精确上游模型 ID → { multiplierBps, bands }` 的映射。优先级为人工覆盖、已同步价目、
 内置价目；按档位合并，不从客户端模型别名或响应模型猜测价格。`syncedAt` 为 ISO 时间或 `null`。
@@ -1060,12 +1059,17 @@ OpenAI 长上下文为输入超过 272000 Token，xAI 为输入达到 200000 Tok
   配置，未提供档位重新继承来源；内置和同步均未登记的模型必须包含 `standard`。
 - `{ "action": "multiplier", "multiplierBps": 20000 }`：设置目标倍率，保留已有人工单价；重复提交不连续相乘。
 - `{ "action": "reset" }`：移除人工单价与倍率，恢复同步价或内置价；仅有人工价格的模型恢复为未配置。
+- `{ "action": "delete" }`：删除非内置模型的同步价目与人工配置；批量包含任何内置模型时整批返回 400，
+  即使该内置模型已有人工覆盖也不能删除。删除不影响历史账单，之后可重新添加或选中同步导入。
 
 一批更新原子提交并写审计，不覆盖未选中的模型。未知字段、错误类型和非法价格字符串等 JSON 合同错误
 返回 422；Provider、模型 ID、批量数量、倍率上限和不支持的档位等业务校验错误返回 400。
 models.dev 同步只导入可表示为当前文本 Token 计价的 OpenAI/xAI 模型；不完整价格、其他输出模态及
 不匹配的上下文梯度在 `skipped` 中返回 `provider/model`。确认会重新抓取价目；若与预览不同返回 400，
-需重新预览。来源不可用返回 502，已有价目保持不变。同步只更新来源层，始终保留人工单价与倍率。
+需重新预览。来源不可用返回 502，已有价目保持不变。`preview` 必须原样提交，`models` 按 Provider
+指定 1～10000 个待同步模型；空选择或未登记的模型返回 400。同步只更新选中模型的来源层，未选中模型
+及所有人工单价与倍率保持不变。选中的已同步模型若不再出现在来源价目中，则移除其来源层，恢复内置价格；
+没有内置价目的模型变为未配置。
 
 ### OpenAI 上游客户端身份
 

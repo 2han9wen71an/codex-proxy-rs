@@ -446,11 +446,21 @@ impl SettingsStore for MemorySettingsStore {
     }
     async fn sync_pricing(
         &self,
-        prices: gateway_core::metering::PricingOverrides,
+        changes: gateway_admin::model::pricing::PricingSyncChanges,
         _: &MutationContext,
     ) -> AdminStoreResult<gateway_admin::model::Revision> {
         let mut pricing = self.pricing.lock().expect("pricing");
-        pricing.synced = prices;
+        for (provider, models) in changes {
+            let stored = pricing.synced.entry(provider).or_default();
+            for (model, price) in models {
+                if let Some(price) = price {
+                    stored.insert(model, price);
+                } else {
+                    stored.remove(&model);
+                }
+            }
+        }
+        pricing.synced.retain(|_, models| !models.is_empty());
         pricing.synced_at = Some(Utc::now());
         let mut settings = self.settings.lock().expect("settings");
         settings.config_revision = next_revision(settings.config_revision);
@@ -463,11 +473,19 @@ impl SettingsStore for MemorySettingsStore {
     ) -> AdminStoreResult<gateway_admin::model::Revision> {
         use gateway_admin::model::pricing::PricingChange;
         let mut pricing = self.pricing.lock().expect("pricing");
-        let models = pricing.overrides.entry(command.provider).or_default();
+        let gateway_admin::model::pricing::StoredPricing {
+            overrides, synced, ..
+        } = &mut *pricing;
+        let models = overrides.entry(command.provider.clone()).or_default();
+        let source = synced.entry(command.provider).or_default();
         for model in command.models {
             match &command.change {
                 PricingChange::Reset => {
                     models.remove(&model);
+                }
+                PricingChange::Delete => {
+                    models.remove(&model);
+                    source.remove(&model);
                 }
                 PricingChange::Replace(p) => {
                     models.insert(model, p.clone());
@@ -503,7 +521,6 @@ impl SettingsStore for MemorySettingsStore {
         let mut settings = self.settings.lock().expect("settings");
         let updated = RuntimeSettings {
             openai_client_profile: None,
-            disable_fast: command.disable_fast.unwrap_or(settings.disable_fast),
             request_location_enabled: command.request_location_enabled,
             request_location: command.request_location,
             config_revision: next_revision(settings.config_revision),
@@ -1243,6 +1260,15 @@ impl UnusedProvider {
 
 #[async_trait]
 impl ProviderAdmin for UnusedProvider {
+    fn pricing_catalog(&self) -> gateway_admin::model::pricing::ProviderPricingCatalog {
+        serde_json::from_value(serde_json::json!({
+            "builtin-model": {
+                "multiplierBps": 10000,
+                "bands": {"standard": {"input": "1", "output": "2", "cacheRead": "0", "cacheWrite": "1"}}
+            }
+        })).unwrap()
+    }
+
     fn provider_kind(&self) -> &ProviderKind {
         &self.kind
     }
@@ -1409,7 +1435,6 @@ fn test_runtime_settings() -> RuntimeSettings {
     ]);
     RuntimeSettings {
         openai_client_profile: None,
-        disable_fast: false,
         request_location_enabled: false,
         request_location: Default::default(),
         config_revision: Revision::new(7).expect("revision"),
