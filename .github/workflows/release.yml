@@ -26,6 +26,9 @@ env:
 
 jobs:
   release-info:
+    # GitHub 读取未公开 Release 草稿需要内容写权限。
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
