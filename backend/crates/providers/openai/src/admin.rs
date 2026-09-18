@@ -59,6 +59,7 @@ use crate::credential::{
 };
 use crate::credential::{
     CodexCredentialCodec, CodexOAuthSecret, oauth_owner_ref, parse_access_token_expiration,
+    parse_chatgpt_jwt_claims,
 };
 use crate::transport::CodexWebSocketPool;
 use crate::transport::profile::{
@@ -576,6 +577,65 @@ impl ProviderAdmin for OpenAiAdminProvider {
         prepared_rotation(prepared, command.account.provider_kind)
     }
 
+    async fn prepare_web_token_update(
+        &self,
+        account_id: &ProviderAccountId,
+        web_access_token: Option<String>,
+    ) -> Result<PreparedCredentialRotation, ProviderAdminError> {
+        let current = self
+            .accounts
+            .load_current_credential(account_id)
+            .await
+            .map_err(map_store_error)?;
+        if current.account.provider() != &self.provider_kind
+            || current.account.authentication_kind()
+                != crate::credential::CODEX_AUTHENTICATION_KIND_OAUTH
+        {
+            return Err(provider_admin_error(ProviderAdminErrorKind::Invalid));
+        }
+        let cleaned_token = match web_access_token {
+            Some(token) => {
+                let trimmed = token.trim();
+                let token_str = trimmed.strip_prefix("Bearer ").unwrap_or(trimmed).trim();
+                if token_str.is_empty() {
+                    None
+                } else {
+                    const MAX_WEB_TOKEN_BYTES: usize = 16 * 1024;
+                    if token_str.len() > MAX_WEB_TOKEN_BYTES
+                        || !token_str.bytes().all(|byte| byte.is_ascii_graphic())
+                    {
+                        return Err(provider_admin_error(ProviderAdminErrorKind::Invalid)
+                            .with_public_message("网页 Access Token 格式无效"));
+                    }
+                    if let Some(exp) = parse_access_token_expiration(token_str)
+                        && exp <= Utc::now()
+                    {
+                        return Err(provider_admin_error(ProviderAdminErrorKind::Invalid)
+                            .with_public_message("该网页 Access Token 已过期，请重新获取"));
+                    }
+                    if let Ok(metadata) = parse_chatgpt_jwt_claims(token_str)
+                        && let (Some(token_user), Some(account_user)) = (
+                            metadata.chatgpt_user_id.as_deref(),
+                            current.account.upstream_user_id(),
+                        )
+                        && token_user != account_user
+                    {
+                        return Err(provider_admin_error(ProviderAdminErrorKind::Invalid)
+                            .with_public_message(
+                                "网页 Access Token 属于不同用户，与当前账号不匹配",
+                            ));
+                    }
+                    Some(token_str.to_owned())
+                }
+            }
+            None => None,
+        };
+        let prepared = CodexCredentialAdmin
+            .prepare_web_token_update(current, cleaned_token)
+            .map_err(map_credential_admin_error)?;
+        prepared_rotation(prepared, self.provider_kind.clone())
+    }
+
     async fn account_configuration(
         &self,
         account_id: &ProviderAccountId,
@@ -927,6 +987,8 @@ struct RotationDocument {
     access_token: String,
     refresh_token: Option<String>,
     id_token: Option<String>,
+    #[serde(default)]
+    web_access_token: Option<String>,
 }
 
 fn rotation_secret(document: ProviderDocument) -> Result<CodexOAuthSecret, ProviderAdminError> {
@@ -937,6 +999,7 @@ fn rotation_secret(document: ProviderDocument) -> Result<CodexOAuthSecret, Provi
         access_token: SecretString::from(document.access_token),
         refresh_token: document.refresh_token.map(SecretString::from),
         id_token: document.id_token.map(SecretString::from),
+        web_access_token: document.web_access_token.map(SecretString::from),
     })
 }
 
@@ -1792,6 +1855,8 @@ fn map_reset_credits_error(error: CodexResetCreditsError) -> ProviderAdminError 
 
     match error {
         Error::InvalidCredentialData => provider_admin_error(ProviderAdminErrorKind::Invalid),
+        Error::WebAccessTokenRequired => provider_admin_error(ProviderAdminErrorKind::Invalid)
+            .with_public_message("当前账号使用 Personal Access Token (at-)，需配置网页 Access Token 才能使用额度充值卡"),
         Error::NotFound => provider_admin_error(ProviderAdminErrorKind::NotFound),
         Error::Store { .. } | Error::TransportUnavailable => {
             provider_admin_error(ProviderAdminErrorKind::Unavailable)
