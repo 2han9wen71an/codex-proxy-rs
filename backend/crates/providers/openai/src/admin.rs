@@ -1068,46 +1068,28 @@ fn project_quota_snapshot(snapshot: CodexAccountQuotaSnapshot) -> ProviderQuota 
         "exhausted".to_owned(),
         Value::Bool(snapshot.quota().is_exhausted()),
     );
-    let now = Utc::now();
     let windows: Vec<ProviderQuotaWindow> = snapshot
         .windows()
         .iter()
         .filter(|window| should_project_quota_window(window))
-        .map(|window| {
-            let is_reset = window.reset_at().is_some_and(|reset| reset <= now);
-            let used_percent = if is_reset {
-                window.used_percent().map(|_| 0.0)
+        .map(|window| ProviderQuotaWindow {
+            key: window.key().to_owned(),
+            group: quota_group(window.kind()).to_owned(),
+            label: codex_quota_window_label(window.kind(), window.role(), window.window_seconds()),
+            limit_id: Some(window.source().to_owned()),
+            limit_name: window.limit_name().map(str::to_owned),
+            role: Some(quota_role(window.role())),
+            local_usage_attribution: if window.is_account_wide() {
+                QuotaLocalUsageAttribution::AccountWide
             } else {
-                window.used_percent()
-            };
-            let limit_reached = if is_reset {
-                false
-            } else {
-                window.limit_reached()
-            };
-            ProviderQuotaWindow {
-                key: window.key().to_owned(),
-                group: quota_group(window.kind()).to_owned(),
-                label: codex_quota_window_label(
-                    window.kind(),
-                    window.role(),
-                    window.window_seconds(),
-                ),
-                limit_id: Some(window.source().to_owned()),
-                limit_name: window.limit_name().map(str::to_owned),
-                role: Some(quota_role(window.role())),
-                local_usage_attribution: if window.is_account_wide() {
-                    QuotaLocalUsageAttribution::AccountWide
-                } else {
-                    QuotaLocalUsageAttribution::Unavailable
-                },
-                window_seconds: window.window_seconds(),
-                used_percent,
-                reset_at: window.reset_at(),
-                limit_reached,
-                local_usage: None,
-                provider_data: None,
-            }
+                QuotaLocalUsageAttribution::Unavailable
+            },
+            window_seconds: window.window_seconds(),
+            used_percent: window.used_percent(),
+            reset_at: window.reset_at(),
+            limit_reached: window.limit_reached(),
+            local_usage: None,
+            provider_data: None,
         })
         .collect();
     // 快照级 limit_reached 只看滚动后的窗口触顶：顶层标记是观测事实，不能

@@ -18,8 +18,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
-use chrono::{DateTime, Utc};
-
 use gateway_core::account::{
     AccountErrorReason, AccountQuotaSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
@@ -62,8 +60,8 @@ use snapshot::{
 const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 pub(crate) const QUOTA_SCHEDULING_TTL: Duration = Duration::from_secs(10 * 60);
 const QUOTA_HYDRATION_FAILURE_TTL: Duration = Duration::from_secs(5);
-const EXHAUSTED_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
-const EXHAUSTED_QUOTA_RESET_GRACE: Duration = Duration::from_secs(2 * 60);
+const PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const QUOTA_RESET_GRACE: Duration = Duration::from_secs(2 * 60);
 /// 首次 OAuth 异步观察失败时，由既有 quota worker 兜底重试的单轮上限。
 const INITIAL_QUOTA_SYNC_BATCH: usize = 100;
 // 5xx 上游拒绝的短退避重试预算；指数退避 1s/2s，吞掉瞬时抖动。
@@ -419,9 +417,9 @@ impl CodexQuotaSchedulingProjection {
             .last_periodic_refresh_at
             .retain(|account_id, _| candidate_ids.contains(account_id));
 
-        // 正常账号通常由真实请求的响应头和 `codex.rate_limits` 被动同步。
-        // 已耗尽账号或包含已到达重置时间窗口的账号在 reset + 2 分钟触发复核；
-        // 未能及时刷新的已耗尽账号每 30 分钟周期重试。
+        // 已耗尽账号首次立即复核，之后每 30 分钟复核，以发现官方提前重置。
+        // reset + 2 分钟额外触发一次复核，给上游重置留出传播时间。
+        // 正常账号仅在非零用量窗口经过宽限期后参与，未更新时复用周期节流。
         let mut reserved = Vec::new();
         for (account, target_reset) in candidates {
             if !periodic_quota_refresh_due(&state, account.id(), target_reset, now, refreshed_at) {
@@ -452,19 +450,22 @@ fn quota_refresh_candidate(
         let reset_at = account.quota().reset_at();
         return Some((account, reset_at));
     }
-    // 正常账号：若包含已到期且尚未刷新的非零用量窗口，在 reset + 2 分钟时主动向官方求证最新用量。
+    // 正常账号首次进入周期候选也要等待宽限期，不能由“无刷新历史”绕过。
     let snapshot = snapshot?;
-    let now_utc = DateTime::<Utc>::from(now);
     let expired_window_reset = snapshot
         .windows()
         .iter()
         .filter(|window| {
-            (window.used_percent().is_some_and(|used| used > 0.0) || window.limit_reached())
-                && window.reset_at().is_some_and(|reset| reset <= now_utc)
+            window.used_percent().is_some_and(|used| used > 0.0) || window.limit_reached()
         })
         .filter_map(CodexQuotaWindow::reset_at)
-        .min()
-        .map(SystemTime::from);
+        .map(SystemTime::from)
+        .filter(|reset| {
+            reset
+                .checked_add(QUOTA_RESET_GRACE)
+                .is_some_and(|due_at| due_at <= now)
+        })
+        .min();
     expired_window_reset.map(|reset_at| (account, Some(reset_at)))
 }
 
@@ -480,9 +481,9 @@ fn periodic_quota_refresh_due(
         .get(account_id)
         .is_none_or(|last| {
             monotonic_now.saturating_duration_since(last.monotonic_at)
-                >= EXHAUSTED_QUOTA_REFRESH_RETRY_INTERVAL
+                >= PERIODIC_QUOTA_REFRESH_RETRY_INTERVAL
                 || reset_at
-                    .and_then(|reset| reset.checked_add(EXHAUSTED_QUOTA_RESET_GRACE))
+                    .and_then(|reset| reset.checked_add(QUOTA_RESET_GRACE))
                     // 已在该边界之后复核过时回到周期重试，避免过期 reset 每轮触发。
                     .is_some_and(|due_at| last.wall_at < due_at && due_at <= now)
         })
@@ -820,7 +821,7 @@ impl CodexCredentialQuotaService {
             .into_iter()
             .map(|observation| observation.account_id)
             .collect::<BTreeSet<_>>();
-        let initial = self.initial_quota_sync_accounts(&accounts, &observed_ids, now);
+        let initial = Self::initial_quota_sync_accounts(&accounts, &observed_ids, now);
         let periodic =
             self.scheduling
                 .reserve_periodic_refreshes(accounts, &observed_snapshots, now);
@@ -899,7 +900,6 @@ impl CodexCredentialQuotaService {
 
     /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
     fn initial_quota_sync_accounts(
-        &self,
         accounts: &[ProviderAccount],
         observed_ids: &BTreeSet<ProviderAccountId>,
         now: SystemTime,
