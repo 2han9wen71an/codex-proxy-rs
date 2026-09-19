@@ -111,7 +111,7 @@ pub struct ClientKeyPage {
     pub next_cursor: Option<ClientKeyCursor>,
 }
 
-/// 仅在创建或显式 reveal 时跨越管理边界的明文 Key。
+/// 仅在创建或显式读取密钥配置时返回的明文 Key；Debug 隐去明文。
 #[derive(Clone, PartialEq, Eq)]
 pub struct ClientKeySecret {
     pub record: ClientKeyRecord,

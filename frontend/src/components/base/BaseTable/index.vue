@@ -18,6 +18,7 @@ import {
   stickyStyle,
   tableStyle,
 } from './columns'
+import { useTableColumnMotion } from './useTableColumnMotion'
 
 const props = withDefaults(defineProps<BaseTableProps<Row>>(), {
   rowKey: 'id',
@@ -52,6 +53,7 @@ const hasRows = computed(() => displayRows.value.length > 0)
 
 const scrollbarRef = useTemplateRef<InstanceType<typeof BaseScrollbar>>('scrollbar')
 const tableRef = useTemplateRef<HTMLTableElement>('table')
+useTableColumnMotion(tableRef, () => computedColumns.value.map(column => column.key))
 const horizontalScrolled = shallowRef(false)
 const horizontalCanScrollRight = shallowRef(false)
 
@@ -223,7 +225,7 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
                 scope="col"
                 :aria-sort="columnAriaSort(column)"
               >
-                <div :class="cellContentClass(column)">
+                <div :class="cellContentClass(column)" :data-column-motion="column.sticky ? undefined : column.key">
                   <button
                     v-if="column.sortable"
                     type="button"
@@ -280,7 +282,7 @@ function sortButtonLabel(column: ResolvedTableColumn<Row>) {
                   ]"
                   :style="stickyStyle(column)"
                 >
-                  <div class="grid content-center" :class="bodyCellContentClass">
+                  <div class="grid content-center" :class="bodyCellContentClass" :data-column-motion="column.sticky ? undefined : column.key">
                     <div :class="cellContentClass(column)" :title="bodyCellTitle(column, row)">
                       <slot
                         :name="column.key"

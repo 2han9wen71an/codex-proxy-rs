@@ -330,7 +330,7 @@ SSE/WS 的 `response.failed` 保留原消息、响应 ID 与其他业务字段�
 认证错误共用 `40101`（会话失效）、`40102`（凭据错误）和 `40301`（权限不足）。
 前端只在明确的会话失效时统一退出，不按 URL 或每个接口上的身份标记分发。
 
-### Key 用量查询
+### Key 用量与客户端配置
 
 以下接口仅接受 Key 身份的 `cpr_session`，不接受 Bearer Key 或管理 API Key。管理员会话返回 `40301`；
 缺失、失效或已停用的 Key 会话返回 `40101`。所有响应带 `Cache-Control: no-store`，未知路径和错误方法返回 JSON。
@@ -339,8 +339,9 @@ SSE/WS 的 `response.failed` 保留原消息、响应 ID 与其他业务字段�
 | --- | --- | --- | --- |
 | `GET` | `/api/key-usage/overview` | `startTime`、`endTime`、`model?` | 用量汇总、趋势、当前额度和北京时间今日健康时间线 |
 | `GET` | `/api/key-usage/records` | 同上，另含 `kind?`、`currentPage?`、`pageSize?` | 当前 Key 的成功请求或错误记录 |
+| `GET` | `/api/key-usage/config` | 无 | 当前 Key 的客户端配置凭据 |
 
-起止时间使用 RFC3339，开始必须早于结束，一次最多 31 天。模型按完整名称匹配；
+用量查询的起止时间使用 RFC3339，开始必须早于结束，一次最多 31 天。模型按完整名称匹配；
 不接受 Key ID、账号、Provider 等范围参数或其他未知字段。页码默认 1，每页默认 20，允许 1–100 条；
 `kind` 为 `success`（默认）或 `error`。分页响应为 `{ items, currentPage, pageSize, total }`。
 
@@ -359,6 +360,10 @@ Token 明细、费用明细、用时/首字与状态。Token 和费用复用现�
 首推理、首文本和总耗时，不含账号容量或调度诊断。
 成功记录的 `status` 为 `success`，不伪造未保存的 HTTP 状态；错误记录为 `error`，只返回客户端状态码，
 缺失的 Token/费用明细为 null。不返回账号资料、Key ID、上游模型或请求标识、原始错误正文或诊断内容。
+
+config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前 Key，不接受任何查询参数。
+使用统计页在打开“密钥配置”弹窗时读取，用于复制 Codex 配置文件或导入 CCSwitch；
+明文不进入用量轮询响应或浏览器持久化存储，关闭弹窗后清除页面中的配置状态。
 
 ## 5. 账号
 

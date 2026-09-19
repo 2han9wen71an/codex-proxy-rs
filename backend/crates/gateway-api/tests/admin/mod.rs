@@ -889,6 +889,10 @@ impl ClientKeyStore for MemoryClientKeyStore {
         &self,
         id: &ClientApiKeyId,
     ) -> AdminStoreResult<Option<ClientKeySecret>> {
+        if let Some(record) = self.0.lock().expect("client key").clone() {
+            return Ok((record.id == *id)
+                .then(|| ClientKeySecret::new(record, format!("sk_{}", "a".repeat(43)))));
+        }
         let now = Utc::now();
         Ok(Some(ClientKeySecret::new(
             ClientKeyRecord {
