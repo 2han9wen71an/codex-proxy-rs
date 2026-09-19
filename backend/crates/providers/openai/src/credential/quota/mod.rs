@@ -18,6 +18,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use chrono::{DateTime, Utc};
+
 use gateway_core::account::{
     AccountErrorReason, AccountQuotaSignals, CredentialRevision, CredentialState,
     OpaqueProviderData, ProviderAccount, ProviderAccountId, ProviderAccountStore,
@@ -394,15 +396,19 @@ impl CodexQuotaSchedulingProjection {
     fn reserve_periodic_refreshes(
         &self,
         accounts: Vec<ProviderAccount>,
+        observed_snapshots: &BTreeMap<ProviderAccountId, CodexAccountQuotaSnapshot>,
         now: SystemTime,
     ) -> Vec<ProviderAccount> {
         let candidates = accounts
             .into_iter()
-            .filter_map(|account| quota_refresh_candidate(account, now))
+            .filter_map(|account| {
+                let snapshot = observed_snapshots.get(account.id());
+                quota_refresh_candidate(account, snapshot, now)
+            })
             .collect::<Vec<_>>();
         let candidate_ids = candidates
             .iter()
-            .map(|account| account.id().clone())
+            .map(|(account, _)| account.id().clone())
             .collect::<BTreeSet<_>>();
         let refreshed_at = Instant::now();
         let mut state = self
@@ -413,18 +419,12 @@ impl CodexQuotaSchedulingProjection {
             .last_periodic_refresh_at
             .retain(|account_id, _| candidate_ids.contains(account_id));
 
-        // 正常账号只由真实请求的响应头和 `codex.rate_limits` 被动同步。
-        // 已耗尽账号每 30 分钟复核，不能等待旧 reset：官方活动可能提前重置额度。
-        // reset + 2 分钟可提前触发一次复核，给上游重置留出传播时间。
+        // 正常账号通常由真实请求的响应头和 `codex.rate_limits` 被动同步。
+        // 已耗尽账号或包含已到达重置时间窗口的账号在 reset + 2 分钟触发复核；
+        // 未能及时刷新的已耗尽账号每 30 分钟周期重试。
         let mut reserved = Vec::new();
-        for account in candidates {
-            if !periodic_quota_refresh_due(
-                &state,
-                account.id(),
-                account.quota().reset_at(),
-                now,
-                refreshed_at,
-            ) {
+        for (account, target_reset) in candidates {
+            if !periodic_quota_refresh_due(&state, account.id(), target_reset, now, refreshed_at) {
                 continue;
             }
             state.last_periodic_refresh_at.insert(
@@ -440,9 +440,32 @@ impl CodexQuotaSchedulingProjection {
     }
 }
 
-fn quota_refresh_candidate(account: ProviderAccount, now: SystemTime) -> Option<ProviderAccount> {
-    (eligible_periodic_quota_refresh(&account, now) && account.quota().is_exhausted())
-        .then_some(account)
+fn quota_refresh_candidate(
+    account: ProviderAccount,
+    snapshot: Option<&CodexAccountQuotaSnapshot>,
+    now: SystemTime,
+) -> Option<(ProviderAccount, Option<SystemTime>)> {
+    if !eligible_periodic_quota_refresh(&account, now) {
+        return None;
+    }
+    if account.quota().is_exhausted() {
+        let reset_at = account.quota().reset_at();
+        return Some((account, reset_at));
+    }
+    // 正常账号：若包含已到期且尚未刷新的非零用量窗口，在 reset + 2 分钟时主动向官方求证最新用量。
+    let snapshot = snapshot?;
+    let now_utc = DateTime::<Utc>::from(now);
+    let expired_window_reset = snapshot
+        .windows()
+        .iter()
+        .filter(|window| {
+            (window.used_percent().is_some_and(|used| used > 0.0) || window.limit_reached())
+                && window.reset_at().is_some_and(|reset| reset <= now_utc)
+        })
+        .filter_map(CodexQuotaWindow::reset_at)
+        .min()
+        .map(SystemTime::from);
+    expired_window_reset.map(|reset_at| (account, Some(reset_at)))
 }
 
 fn periodic_quota_refresh_due(
@@ -781,8 +804,26 @@ impl CodexCredentialQuotaService {
         });
         let mut summary = CodexQuotaSyncSummary::default();
         let now = SystemTime::now();
-        let initial = self.initial_quota_sync_accounts(&accounts, now).await?;
-        let periodic = self.scheduling.reserve_periodic_refreshes(accounts, now);
+        let account_ids = accounts
+            .iter()
+            .map(|account| account.id().clone())
+            .collect::<Vec<_>>();
+        let observed = self.store.get_quotas(&account_ids).await?;
+        let observed_snapshots = observed
+            .iter()
+            .filter_map(|obs| {
+                quota_snapshot_from_observation(obs)
+                    .map(|snapshot| (obs.account_id.clone(), snapshot))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let observed_ids = observed
+            .into_iter()
+            .map(|observation| observation.account_id)
+            .collect::<BTreeSet<_>>();
+        let initial = self.initial_quota_sync_accounts(&accounts, &observed_ids, now);
+        let periodic =
+            self.scheduling
+                .reserve_periodic_refreshes(accounts, &observed_snapshots, now);
         let accounts = initial
             .into_iter()
             .chain(periodic)
@@ -857,28 +898,20 @@ impl CodexCredentialQuotaService {
     }
 
     /// `quota_observed_at` 为空代表首次异步观察尚未成功；不另建同步状态表。
-    async fn initial_quota_sync_accounts(
+    fn initial_quota_sync_accounts(
         &self,
         accounts: &[ProviderAccount],
+        observed_ids: &BTreeSet<ProviderAccountId>,
         now: SystemTime,
-    ) -> Result<Vec<ProviderAccount>, CodexCredentialQuotaError> {
-        let account_ids = accounts
-            .iter()
-            .map(|account| account.id().clone())
-            .collect::<Vec<_>>();
-        let observed = self.store.get_quotas(&account_ids).await?;
-        let observed_ids = observed
-            .into_iter()
-            .map(|observation| observation.account_id)
-            .collect::<BTreeSet<_>>();
-        Ok(accounts
+    ) -> Vec<ProviderAccount> {
+        accounts
             .iter()
             .filter(|account| {
                 !observed_ids.contains(account.id()) && eligible_initial_quota_sync(account, now)
             })
             .take(INITIAL_QUOTA_SYNC_BATCH)
             .cloned()
-            .collect())
+            .collect()
     }
 
     /// 解析并 revision-fenced 落库单账号的 Provider quota JSON。

@@ -1110,6 +1110,81 @@ async fn openai_admin_keeps_confirmed_exhaustion_separate_from_raw_usage_display
 }
 
 #[tokio::test]
+async fn openai_admin_provider_projects_expired_window_as_reset_without_changing_raw_store() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_admin_expired_window";
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_owned(),
+            name: "admin expired window".to_owned(),
+            secret: secret("admin-expired-window-access"),
+            verified_account: profile("chatgpt-admin-expired-window"),
+            next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let account = store.account(account_id).expect("stored account");
+    let past_reset_at = Utc::now().timestamp() - 60;
+    let observed_at = SystemTime::now() - Duration::from_secs(300);
+    store
+        .compare_and_swap_quota(QuotaObservation {
+            plan_type: None,
+            account_id: account.id().clone(),
+            expected_revision: account.revision(),
+            quota: OpaqueProviderData::new(
+                json!({
+                    "rate_limit": {
+                        "allowed": true,
+                        "limit_reached": true,
+                        "primary_window": {"used_percent": 100, "reset_at": past_reset_at}
+                    }
+                })
+                .as_object()
+                .expect("quota object")
+                .clone(),
+            ),
+            observed_at,
+            state: QuotaState::allowed(observed_at),
+        })
+        .await
+        .expect("persist raw quota");
+
+    let config = valid_config();
+    let bundle = provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(Arc::clone(&store), Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("OpenAI bundle");
+
+    let projected = bundle
+        .admin_provider()
+        .quota(ProviderQuotaRequest {
+            account_id: account.id().clone(),
+            refresh: false,
+            rolling_usage: None,
+        })
+        .await
+        .expect("project quota");
+
+    assert_eq!(projected.windows.len(), 1);
+    assert_eq!(projected.windows[0].used_percent, Some(0.0));
+    assert!(!projected.windows[0].limit_reached);
+    assert!(!projected.limit_reached);
+
+    let raw = store
+        .get_quotas(std::slice::from_ref(account.id()))
+        .await
+        .expect("read raw quota")
+        .pop()
+        .expect("raw quota");
+    assert_eq!(
+        raw.quota.expose_to_provider()["rate_limit"]["primary_window"]["used_percent"],
+        100
+    );
+}
+
+#[tokio::test]
 async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit() {
     let store = Arc::new(MemoryAccountStore::default());
     store
