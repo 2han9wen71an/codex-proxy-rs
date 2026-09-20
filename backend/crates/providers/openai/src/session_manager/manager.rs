@@ -633,7 +633,7 @@ impl SessionManager {
         if ticket.expires_at <= now {
             return Err("ticket_expired".to_owned());
         }
-        if ticket.expires_at > now + TTL_SECONDS || !valid_state(&ticket.value) {
+        if ticket.expires_at > now + TTL_SECONDS || !valid_state_for_account(account.session_keepalive_expected_length(), &ticket.value) {
             return Err("invalid_ticket".to_owned());
         }
         if ticket.credential_revision != account.revision().get() {
