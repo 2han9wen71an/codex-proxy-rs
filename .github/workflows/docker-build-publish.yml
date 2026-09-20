@@ -46,6 +46,7 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile
+          target: runtime
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.arch }}
