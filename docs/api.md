@@ -740,12 +740,13 @@ OAuth start 使用：
 
 - `targetDays`、`extrapolated`：对应周期存在真实账号级窗口时采用实际时长；缺少对应窗口时，使用
   可统计的周/月窗口按 7/30 天折算，明确标记 `extrapolated: true`。不把短期限流或模型专属桶当作账号容量。
-- `estimatedTokens` / `estimatedUsd` 及对应 `*Display`：完整目标周期的近似容量，
-  公式为 `样本用量 × 100 / sampledPercent × 目标窗口秒数 / 源窗口秒数`。
+- `estimatedTokens` / `estimatedUsd` 及对应 `*Display`：本周期已记录用量加预计剩余量，
+  公式为 `(本周期已记录用量 + 样本用量 × (100 - usedPercent) / sampledPercent) × 目标窗口秒数 / 源窗口秒数`。
+  真实周期由上游额度重置边界定义，不按自然周/月累计；只有折算结果才乘以目标与源窗口的时长比。
 - `remainingTokens` / `remainingUsd` 及对应 `*Display`：**额度快照时源窗口**的剩余估算，
   公式为 `样本用量 × (100 - usedPercent) / sampledPercent`；不随目标周期折算，不代表当前可消费余额。
 - `source`：源窗口名称 `label`、已用比例 `usedPercent` / `usedPercentDisplay`、
-  额度观测时间 `observedAt` / `observedAtDisplay`、用于过期检查的 `resetAt`，以及选中采样区间
+  额度观测时间 `observedAt` / `observedAtDisplay`、用于过期检查的 `resetAt`，以及本周期累计
   已记录的 `tokensDisplay` / `usdDisplay`。`source: null` 表示没有可选的源窗口。
   `observedAt` 表示额度观测时间，与本次查询的 `generatedAt` 不同。
 - `unavailableReason`：不能估算时的说明，正常为 `null`。有效进度少于 5 个百分点不预测；
@@ -759,7 +760,9 @@ OAuth start 使用：
 完成时间的累计用量建立基线，每累计至少 5 个百分点形成一段，使用最近 3 个完整段及未满一段的尾部。
 上式中的 `sampledPercent` 是内部有效额度进度（百分点），不是时间进度或对外响应字段。
 只对合并区间计算比值，不平均逐请求小分母比值；重复读数不增加段数，大于 1 个百分点的回落或累计
-计数倒退会中断采样，不能静默跨越。缓存命中属于输入，不重复相加；其他币种或缺少有效金额不能当成零 USD。
+计数倒退会中断采样，不能静默跨越。重置时间改变或额度明显回落时，旧段不参与新的累计和预测；
+当查询区间内包含重置前记录时，以首个新段观测的累计值为基线重新计数，积累至少 5 个百分点后恢复预测。
+该基线之前无法精确归属的用量不补算。缓存命中属于输入，不重复相加；其他币种或缺少有效金额不能当成零 USD。
 
 采样查询 `[max(resetAt - windowSeconds, accountAddedAt), observedAt)` 内开始的请求，
 仅把 `completedAt <= observedAt` 的完整交付用量计入当前分子；历史分子按各点的完成时间累计，

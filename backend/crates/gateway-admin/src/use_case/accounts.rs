@@ -740,7 +740,7 @@ impl AccountsService for DefaultAccountsService {
                     usage: point.usage,
                 });
             }
-            let mut sample = select_forecast_sample(
+            let sample = select_forecast_sample(
                 window.key.clone(),
                 query.range.start,
                 QuotaForecastPoint {
@@ -750,13 +750,8 @@ impl AccountsService for DefaultAccountsService {
                 },
                 points,
                 history.pending_request_count,
+                interrupted,
             );
-            if interrupted
-                && sample.method
-                    == crate::model::quota_forecast_sampling::QuotaForecastMethod::Cumulative
-            {
-                sample.discontinuous = true;
-            }
             samples.push(sample);
         }
         Ok(AccountQuotaForecastReport {

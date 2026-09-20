@@ -2040,6 +2040,29 @@ async fn quota_forecast_mid_cycle_sampling_accepts_small_reset_jitter_but_not_a_
             .unwrap()
             .contains("不连续")
     );
+    // 新额度段已有足够观测后恢复预测，但总量不能带回重置前的累计用量。
+    let mut first = make_point(1, 5.0, 1_750, 0);
+    first.completed_at = now - TimeDelta::minutes(45);
+    first.started_at = first.completed_at - TimeDelta::seconds(10);
+    let mut next = make_point(1, 20.0, 1_900, 0);
+    next.completed_at = now - TimeDelta::minutes(20);
+    next.started_at = next.completed_at - TimeDelta::seconds(10);
+    store
+        .quota_forecast_history
+        .lock()
+        .unwrap()
+        .points
+        .extend([first, next]);
+    let result = services
+        .accounts()
+        .quota_forecast(&ProviderAccountId::new("acct_test").unwrap())
+        .await
+        .unwrap();
+    let cycle = &result.forecasts[0];
+    assert!(cycle.unavailable_reason.is_none());
+    assert_eq!(cycle.source.as_ref().unwrap().tokens, Some(250));
+    assert_eq!(cycle.remaining_tokens, Some(429));
+    assert_eq!(cycle.estimated_tokens, Some(679));
 }
 
 #[tokio::test]
