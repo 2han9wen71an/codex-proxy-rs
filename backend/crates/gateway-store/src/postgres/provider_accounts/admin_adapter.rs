@@ -899,6 +899,7 @@ impl AccountStore for PgAdminAccountStore {
                 account_ids: command.account_ids,
                 enable_session_keepalive: None,
                 session_keepalive_models: None,
+                session_keepalive_expected_length: None,
                 notes: None,
                 enabled: command.enabled,
                 concurrency_limit: command.concurrency_limit,
