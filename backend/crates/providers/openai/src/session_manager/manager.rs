@@ -37,7 +37,6 @@ use crate::{
 
 pub const SESSION_KEEPALIVE_MODELS: [&str; 2] = ["gpt-5.6-sol", "gpt-6-astra"];
 const TTL_SECONDS: i64 = 3600;
-const DEFAULT_TURN_STATE_LENGTH: usize = 292;
 const MAX_REFRESH_ATTEMPTS: u32 = 100;
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 const REFRESH_BEFORE_SECONDS: i64 = 600;
