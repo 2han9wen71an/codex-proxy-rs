@@ -180,13 +180,13 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "accountAutoFreezeThreshold": 12,
             "accountAutoFreezeWindowSeconds": 600,
             "accountAutoFreezeDurationSeconds": 7200,
-	            "accountAutoFreezeProbeEnabled": true,
-	            "accountAutoFreezeProbeModel": null,
-	            "accountAutoFreezeAdaptiveConcurrency": true,
-	            "accountWarmupEnabled": false,
-	            "accountWarmupScheduleTime": "08:00",
-	            "accountWarmupModel": null,
-	            "updatedAt": "2026-08-02T10:30:00Z"
+                "accountAutoFreezeProbeEnabled": true,
+                "accountAutoFreezeProbeModel": null,
+                "accountAutoFreezeAdaptiveConcurrency": true,
+                "accountWarmupEnabled": false,
+                "accountWarmupScheduleTime": "08:00",
+                "accountWarmupModel": null,
+                "updatedAt": "2026-08-02T10:30:00Z"
         })
     );
 }

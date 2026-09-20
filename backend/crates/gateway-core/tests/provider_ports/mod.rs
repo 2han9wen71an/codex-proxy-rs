@@ -113,7 +113,7 @@ fn scheduling_state_preserves_provider_neutral_signals() {
 
 #[test]
 fn warmup_schedule_time_and_policy_validation() {
-    use gateway_core::provider_ports::{valid_warmup_schedule_time, ProviderWarmupPolicy};
+    use gateway_core::provider_ports::{ProviderWarmupPolicy, valid_warmup_schedule_time};
 
     assert!(valid_warmup_schedule_time("08:00"));
     assert!(valid_warmup_schedule_time("08:00,13:00"));
