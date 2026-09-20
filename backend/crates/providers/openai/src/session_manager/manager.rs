@@ -189,6 +189,9 @@ impl SessionManager {
             .lock()
             .await
             .retain(|model, _| account.session_keepalive_models().contains(model));
+        if repeat {
+            sessions.attempts.lock().await.clear();
+        }
         let client = self.client(&proxy).await?;
         let credential = self
             .repository
@@ -233,7 +236,7 @@ impl SessionManager {
                         biased;
                         () = cancelled.cancelled() => Err("账号配置已变化，已停止重写".to_owned()),
                         result = self.refresh_model_round(account, proxy, sessions, generation, model,
-                            client, authorization.expose_secret(), &credential.installation_id, &binding, policy.concurrency()) => result,
+                            client, authorization.expose_secret(), &credential.installation_id, &binding, policy.concurrency(), repeat) => result,
                     };
                     let item = match result {
                         Ok(None) => return None,
@@ -305,13 +308,14 @@ impl SessionManager {
         installation_id: &str,
         binding: &[u8; 32],
         configured_concurrency: u32,
+        force: bool,
     ) -> Result<Option<i64>, String> {
         self.validate_refresh_context(account, proxy, sessions, generation, model, binding)
             .await
             .map_err(str::to_owned)?;
         match self.load_ticket(account, model).await {
             Ok(Some(ticket))
-                if ticket.expires_at - Utc::now().timestamp() >= REFRESH_BEFORE_SECONDS =>
+                if !force && ticket.expires_at - Utc::now().timestamp() >= REFRESH_BEFORE_SECONDS =>
             {
                 return Ok(Some(ticket.expires_at));
             }
@@ -344,6 +348,7 @@ impl SessionManager {
             *attempt
         };
         if attempt > MAX_REFRESH_ATTEMPTS {
+            sessions.attempts.lock().await.remove(model);
             tracing::warn!(
                 account_id = account.id().as_str(),
                 model,
