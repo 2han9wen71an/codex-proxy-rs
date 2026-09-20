@@ -191,6 +191,7 @@ impl SessionManager {
             .retain(|model, _| account.session_keepalive_models().contains(model));
         if repeat {
             sessions.attempts.lock().await.clear();
+            sessions.retry_after.lock().await.clear();
         }
         let client = self.client(&proxy).await?;
         let credential = self
@@ -332,12 +333,13 @@ impl SessionManager {
             }
             _ => {}
         }
-        if sessions
-            .retry_after
-            .lock()
-            .await
-            .get(model)
-            .is_some_and(|deadline| *deadline > tokio::time::Instant::now())
+        if !force
+            && sessions
+                .retry_after
+                .lock()
+                .await
+                .get(model)
+                .is_some_and(|deadline| *deadline > tokio::time::Instant::now())
         {
             return Ok(None);
         }
