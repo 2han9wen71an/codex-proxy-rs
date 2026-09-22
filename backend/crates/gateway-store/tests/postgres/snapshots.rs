@@ -847,6 +847,11 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
     seed_api_key(&database.pool, "key_diag", "My Key", started_at).await;
     let store = PgExecutionStore::new(database.pool.clone());
     for id in ["req_key_a", "req_key_b"] {
+        let upstream_model = if id == "req_key_a" {
+            "upstream-model"
+        } else {
+            "other-model"
+        };
         let mut request = new_request(id, started_at);
         request.client_api_key_id = Some("key_diag".to_owned());
         request.client_api_key_ref = "key_diag".to_owned();
@@ -859,7 +864,7 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
             provider_kind: "openai".to_owned(),
             provider_account_id: None,
             provider_account_ref: Some("acct_key".to_owned()),
-            upstream_model_id: Some("upstream-model".to_owned()),
+            upstream_model_id: Some(upstream_model.to_owned()),
             upstream_transport: "http_sse".to_owned(),
             http_version: None,
         };
@@ -892,6 +897,27 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
     assert_eq!(diagnostics[0].name, "My Key");
     assert_eq!(diagnostics[0].request_count, 2);
     assert_eq!(diagnostics[0].latency_p95_ms, Some(1950));
+
+    let key_models = repository
+        .usage_diagnostics(
+            range_around(started_at),
+            UsageRecordFilter::default(),
+            DiagnosticDimension::KeyModel,
+        )
+        .await
+        .expect("key/model diagnostics");
+    assert_eq!(key_models.len(), 2);
+    let names = key_models
+        .iter()
+        .map(|item| {
+            let (key, model): (String, String) = serde_json::from_str(&item.key).unwrap();
+            assert_eq!(key, "key_diag");
+            assert_eq!(item.request_count, 1);
+            (model, item.name.clone())
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(names["upstream-model"], "My Key → upstream-model");
+    assert_eq!(names["other-model"], "My Key → other-model");
 
     sqlx::query("delete from client_api_keys where id = 'key_diag'")
         .execute(&database.pool)

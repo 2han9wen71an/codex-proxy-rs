@@ -5,6 +5,8 @@ use serde_json::Value;
 
 const MODEL_DIAGNOSTIC_DIMENSION_SQL: &str =
     "coalesce(mr.upstream_model_id, mr.requested_model_id)";
+const KEY_MODEL_DIAGNOSTIC_DIMENSION_SQL: &str =
+    "json_build_array(mr.client_api_key_ref, coalesce(mr.upstream_model_id, mr.requested_model_id))::text";
 
 pub(crate) fn push_usage_filter(
     query: &mut QueryBuilder<Postgres>,
@@ -449,9 +451,9 @@ pub(crate) async fn usage_diagnostics(
             where currency_grouping = 1
             order by request_count desc, dimension_name limit ",
     );
-    // 单个 Key 的模型用量页需要列出该 Key 在区间内的全部模型。
-    statement.push_bind(if dimension == DiagnosticDimension::Model
-        && filter.client_api_key_ref.is_some()
+    // Key 用量页及管理端 Key×模型视图都需要保留区间内的全部组合。
+    statement.push_bind(if dimension == DiagnosticDimension::KeyModel
+        || (dimension == DiagnosticDimension::Model && filter.client_api_key_ref.is_some())
     {
         i64::MAX
     } else {
@@ -521,6 +523,28 @@ pub(crate) async fn usage_diagnostics(
                     .collect::<Vec<_>>(),
             )
             .await?
+        }
+        DiagnosticDimension::KeyModel => {
+            let pairs = observations
+                .iter()
+                .map(|item| {
+                    serde_json::from_str::<(String, String)>(&item.key)
+                        .map_err(|_| postgres_unavailable("decode key/model diagnostic"))
+                })
+                .collect::<StoreResult<Vec<_>>>()?;
+            let names = diagnostic_api_key_display_names(
+                pool,
+                &pairs.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>(),
+            )
+            .await?;
+            observations
+                .iter()
+                .zip(pairs)
+                .map(|(item, (key, model))| {
+                    let name = names.get(&key).map_or(key.as_str(), String::as_str);
+                    (item.key.clone(), format!("{name} → {model}"))
+                })
+                .collect()
         }
         _ => HashMap::new(),
     };
@@ -600,6 +624,7 @@ pub(crate) fn diagnostic_dimension_sql(dimension: DiagnosticDimension) -> &'stat
     match dimension {
         DiagnosticDimension::Provider => "coalesce(mr.provider_kind, 'unrouted')",
         DiagnosticDimension::Model => MODEL_DIAGNOSTIC_DIMENSION_SQL,
+        DiagnosticDimension::KeyModel => KEY_MODEL_DIAGNOSTIC_DIMENSION_SQL,
         DiagnosticDimension::Account => "coalesce(mr.provider_account_ref, 'unrouted')",
         DiagnosticDimension::ApiKey => "mr.client_api_key_ref",
         DiagnosticDimension::Transport => {
@@ -622,6 +647,11 @@ pub(crate) fn push_diagnostic_dimension_filter(
         }
         DiagnosticDimension::Model => {
             statement.push(" and ");
+            statement.push(MODEL_DIAGNOSTIC_DIMENSION_SQL);
+            statement.push(" is not null");
+        }
+        DiagnosticDimension::KeyModel => {
+            statement.push(" and mr.client_api_key_ref is not null and ");
             statement.push(MODEL_DIAGNOSTIC_DIMENSION_SQL);
             statement.push(" is not null");
         }

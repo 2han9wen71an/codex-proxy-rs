@@ -185,6 +185,7 @@ pub struct OpsErrorQuery {
 pub enum DiagnosticDimension {
     Provider,
     Model,
+    KeyModel,
     Account,
     ApiKey,
     Transport,

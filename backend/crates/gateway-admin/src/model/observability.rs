@@ -158,6 +158,7 @@ pub struct OpsErrorQuery {
 pub enum DiagnosticDimension {
     Provider,
     Model,
+    KeyModel,
     Account,
     ApiKey,
     Transport,
@@ -1156,6 +1157,7 @@ pub struct DiagnosticsItem {
     pub retry_rate: f64,
     pub impact_score: f64,
     pub estimated_cost: Option<DecimalAmount>,
+    pub cost_incomplete: bool,
     pub attempt_count: u64,
     pub total_tokens: u64,
 }
