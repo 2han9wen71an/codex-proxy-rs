@@ -14,6 +14,7 @@ import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
 import { useAccountResetCredits } from '../../composables/useAccountResetCredits'
+import { extractWebAccessToken } from '../../utils/webAccessToken'
 import UsageLimits from './UsageLimits.vue'
 
 const props = defineProps<{
@@ -109,9 +110,12 @@ watch(panelOpen, (isOpen) => {
 })
 
 async function handleSaveWebToken() {
-  const token = webTokenInput.value.trim()
-  if (!token) {
-    webTokenError.value = '请输入网页 Access Token'
+  let token: string
+  try {
+    token = extractWebAccessToken(webTokenInput.value)
+  }
+  catch (error) {
+    webTokenError.value = errorMessage(error)
     return
   }
   savingWebToken.value = true
@@ -298,13 +302,13 @@ function handleRequestConsume(creditId: string) {
             <BaseTextarea
               v-model="webTokenInput"
               :rows="3"
-              placeholder="粘贴以 ey... 开头的网页 Access Token"
+              placeholder="粘贴 Token、Bearer Token 或完整的 /api/auth/session JSON"
               :disabled="savingWebToken"
               class="mb-2.5"
             />
             <div class="flex flex-wrap items-center justify-between gap-2">
               <span class="text-[10px] text-cp-text-quaternary">
-                登录 chatgpt.com 后打开 api/auth/session 即可复制 accessToken
+                可粘贴裸 Token、Bearer Token 或完整 /api/auth/session JSON，系统自动提取 accessToken
               </span>
               <BaseButton
                 size="sm"
