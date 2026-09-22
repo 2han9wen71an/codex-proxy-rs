@@ -12,7 +12,7 @@ use gateway_core::account::RotationStrategy;
 use gateway_core::policy::CodexClientVersion;
 use gateway_core::provider_ports::{
     ProviderFreezePolicy, ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
-    ProviderStoreErrorKind,
+    ProviderStoreErrorKind, ProviderWarmupPolicy,
 };
 
 use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
@@ -47,6 +47,9 @@ pub struct RuntimeSettings {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -103,6 +106,12 @@ impl fmt::Debug for RuntimeSettings {
                 "account_auto_freeze_adaptive_concurrency",
                 &self.account_auto_freeze_adaptive_concurrency,
             )
+            .field("account_warmup_enabled", &self.account_warmup_enabled)
+            .field(
+                "account_warmup_schedule_time",
+                &self.account_warmup_schedule_time,
+            )
+            .field("account_warmup_model", &self.account_warmup_model)
             .field("updated_at", &self.updated_at)
             .finish()
     }
@@ -137,6 +146,9 @@ pub struct RuntimeSettingsUpdate {
     pub account_auto_freeze_probe_enabled: bool,
     pub account_auto_freeze_probe_model: Option<String>,
     pub account_auto_freeze_adaptive_concurrency: bool,
+    pub account_warmup_enabled: bool,
+    pub account_warmup_schedule_time: String,
+    pub account_warmup_model: Option<String>,
 }
 
 impl fmt::Debug for RuntimeSettingsUpdate {
@@ -175,6 +187,8 @@ impl RuntimeSettingsUpdate {
             || !valid_client_version(self.min_codex_desktop_version.as_deref())
             || !valid_client_version(self.min_codex_cli_version.as_deref())
             || !valid_probe_model(self.account_auto_freeze_probe_model.as_deref())
+            || !gateway_core::provider_ports::valid_warmup_schedule_time(&self.account_warmup_schedule_time)
+            || !valid_probe_model(self.account_warmup_model.as_deref())
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
         {
             return Err(StoreError::InvalidData {
@@ -240,7 +254,8 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                    account_auto_freeze_adaptive_concurrency
+                    account_auto_freeze_adaptive_concurrency,
+                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -312,6 +327,21 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
             )
         })
     }
+
+    fn load_warmup_policy(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderWarmupPolicy, ProviderStoreError>> {
+        Box::pin(async move {
+            let settings = RuntimeSettingsRepository::load_runtime_settings(self)
+                .await
+                .map_err(|_| provider_unavailable("load warmup policy"))?;
+            ProviderWarmupPolicy::try_new(
+                settings.account_warmup_enabled,
+                settings.account_warmup_schedule_time,
+                settings.account_warmup_model,
+            )
+        })
+    }
 }
 
 pub(crate) async fn load_runtime_settings_in_transaction(
@@ -326,7 +356,8 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
-                account_auto_freeze_adaptive_concurrency
+                account_auto_freeze_adaptive_concurrency,
+                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -373,53 +404,59 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      account_auto_freeze_adaptive_concurrency = $22,
                      request_location_json = $23,
                      request_location_enabled = $24,
-                     responses_max_decompressed_body_bytes = $25,
-                     provider_request_profiles_json = provider_request_profiles_json
-                         || case when $26::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $26::jsonb) end
-                         || case when $27::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $27::jsonb) end,
-	                 updated_at = now()
-	             where id = 1
-	             returning config_revision",
-    )
-    .bind(update.admin_api_key.as_deref())
-    .bind(refresh_margin_seconds)
-    .bind(i64::from(update.refresh_concurrency))
-    .bind(i64::from(update.max_concurrent_per_account))
-    .bind(i64::try_from(update.request_interval_ms).map_err(|_| invalid_numeric())?)
-    .bind(&update.rotation_strategy)
-    .bind(sqlx::types::Json(&update.model_mappings))
-    .bind(i64::from(update.usage_retention_days))
-    .bind(i64::from(update.ops_event_retention_days))
-    .bind(i64::from(update.audit_retention_days))
-    .bind(update.min_codex_desktop_version.as_deref())
-    .bind(update.min_codex_cli_version.as_deref())
-    .bind(i64::from(update.max_waiting_per_key))
-    .bind(i64::from(update.max_waiting_per_account))
-    .bind(i64::from(update.concurrency_wait_timeout_seconds))
-    .bind(update.account_auto_freeze_enabled)
-    .bind(i64::from(update.account_auto_freeze_threshold))
-    .bind(i64::try_from(update.account_auto_freeze_window_seconds).map_err(|_| invalid_numeric())?)
-    .bind(
-        i64::try_from(update.account_auto_freeze_duration_seconds)
-            .map_err(|_| invalid_numeric())?,
-    )
-    .bind(update.account_auto_freeze_probe_enabled)
-    .bind(update.account_auto_freeze_probe_model.as_deref())
-    .bind(update.account_auto_freeze_adaptive_concurrency)
-    .bind(sqlx::types::Json(
-        update
-            .request_location
-            .clone()
-            .normalized()
-            .map_err(|_| invalid_location())?,
-    ))
-    .bind(update.request_location_enabled)
-    .bind(
-        i64::try_from(update.responses_max_decompressed_body_bytes)
-            .map_err(|_| invalid_numeric())?,
-    )
-    .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
-    .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+	                     responses_max_decompressed_body_bytes = $25,
+	                     provider_request_profiles_json = provider_request_profiles_json
+	                         || case when $26::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $26::jsonb) end
+	                         || case when $27::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $27::jsonb) end,
+	                     account_warmup_enabled = $28,
+	                     account_warmup_schedule_time = $29,
+	                     account_warmup_model = $30,
+		                 updated_at = now()
+		             where id = 1
+		             returning config_revision",
+	    )
+	    .bind(update.admin_api_key.as_deref())
+	    .bind(refresh_margin_seconds)
+	    .bind(i64::from(update.refresh_concurrency))
+	    .bind(i64::from(update.max_concurrent_per_account))
+	    .bind(i64::try_from(update.request_interval_ms).map_err(|_| invalid_numeric())?)
+	    .bind(&update.rotation_strategy)
+	    .bind(sqlx::types::Json(&update.model_mappings))
+	    .bind(i64::from(update.usage_retention_days))
+	    .bind(i64::from(update.ops_event_retention_days))
+	    .bind(i64::from(update.audit_retention_days))
+	    .bind(update.min_codex_desktop_version.as_deref())
+	    .bind(update.min_codex_cli_version.as_deref())
+	    .bind(i64::from(update.max_waiting_per_key))
+	    .bind(i64::from(update.max_waiting_per_account))
+	    .bind(i64::from(update.concurrency_wait_timeout_seconds))
+	    .bind(update.account_auto_freeze_enabled)
+	    .bind(i64::from(update.account_auto_freeze_threshold))
+	    .bind(i64::try_from(update.account_auto_freeze_window_seconds).map_err(|_| invalid_numeric())?)
+	    .bind(
+	        i64::try_from(update.account_auto_freeze_duration_seconds)
+	            .map_err(|_| invalid_numeric())?,
+	    )
+	    .bind(update.account_auto_freeze_probe_enabled)
+	    .bind(update.account_auto_freeze_probe_model.as_deref())
+	    .bind(update.account_auto_freeze_adaptive_concurrency)
+	    .bind(sqlx::types::Json(
+	        update
+	            .request_location
+	            .clone()
+	            .normalized()
+	            .map_err(|_| invalid_location())?,
+	    ))
+	    .bind(update.request_location_enabled)
+	    .bind(
+	        i64::try_from(update.responses_max_decompressed_body_bytes)
+	            .map_err(|_| invalid_numeric())?,
+	    )
+	    .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+	    .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+	    .bind(update.account_warmup_enabled)
+	    .bind(&update.account_warmup_schedule_time)
+	    .bind(update.account_warmup_model.as_deref())
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -499,6 +536,9 @@ struct RuntimeSettingsRow {
     account_auto_freeze_probe_enabled: bool,
     account_auto_freeze_probe_model: Option<String>,
     account_auto_freeze_adaptive_concurrency: bool,
+    account_warmup_enabled: bool,
+    account_warmup_schedule_time: String,
+    account_warmup_model: Option<String>,
 }
 
 fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
@@ -544,6 +584,9 @@ fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<Runtime
         account_auto_freeze_probe_enabled: row.account_auto_freeze_probe_enabled,
         account_auto_freeze_probe_model: row.account_auto_freeze_probe_model,
         account_auto_freeze_adaptive_concurrency: row.account_auto_freeze_adaptive_concurrency,
+        account_warmup_enabled: row.account_warmup_enabled,
+        account_warmup_schedule_time: row.account_warmup_schedule_time,
+        account_warmup_model: row.account_warmup_model,
     })
 }
 
