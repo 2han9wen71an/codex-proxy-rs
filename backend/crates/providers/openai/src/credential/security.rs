@@ -58,6 +58,33 @@ impl CodexRuntimeAuthentication {
         }
     }
 
+    /// 管理端账号操作（重置卡、个人资料等账号维度端点）的认证头。
+    /// 这些端点接受网页会话凭据；若配置了独立的网页 Access Token，
+    /// 则优先使用它；否则回退到主 access_token。
+    pub fn management_authorization_header(
+        &self,
+    ) -> Result<SecretString, CodexCredentialDataError> {
+        match self {
+            Self::ApiKey(auth) => Ok(SecretString::from(format!(
+                "Bearer {}",
+                auth.secret.expose_secret()
+            ))),
+            Self::OAuth(secret) => {
+                if let Some(web_token) = &secret.web_access_token {
+                    Ok(SecretString::from(format!(
+                        "Bearer {}",
+                        web_token.expose_secret().trim()
+                    )))
+                } else {
+                    Ok(SecretString::from(format!(
+                        "Bearer {}",
+                        secret.access_token.expose_secret().trim()
+                    )))
+                }
+            }
+        }
+    }
+
     #[must_use]
     pub const fn oauth(&self) -> Option<&CodexOAuthSecret> {
         match self {
@@ -136,6 +163,10 @@ impl CodexCredentialCodec {
             oauth_client_id: None,
             oauth_scope: None,
             cookies,
+            web_access_token: secret
+                .web_access_token
+                .as_ref()
+                .map(|value| value.expose_secret().to_owned()),
         }))
     }
 
@@ -190,6 +221,7 @@ impl CodexCredentialCodec {
                         access_token: SecretString::from(data.access_token),
                         refresh_token: data.refresh_token.map(SecretString::from),
                         id_token: data.id_token.map(SecretString::from),
+                        web_access_token: data.web_access_token.map(SecretString::from),
                     }),
                     data.principal,
                     data.installation_id,

@@ -139,6 +139,87 @@ async fn profile_statistics_uses_one_profile_request_and_preserves_official_fiel
 }
 
 #[tokio::test]
+async fn profile_statistics_prefers_web_access_token_when_main_token_is_expired() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/profiles/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "profile": {"display_name": "Web", "username": "web", "profile_picture_url": null},
+            "stats": {
+                "lifetime_tokens": 0,
+                "peak_daily_tokens": 0,
+                "longest_running_turn_sec": 0,
+                "current_streak_days": 0,
+                "longest_streak_days": 0,
+                "daily_usage_buckets": [],
+                "fast_mode_usage_percentage": 0,
+                "most_used_reasoning_effort": null,
+                "most_used_reasoning_effort_percentage": 0,
+                "unique_skills_used": 0,
+                "total_skills_used": 0,
+                "total_threads": 0,
+                "top_invocations": []
+            },
+            "metadata": {"stats_error": null}
+        })))
+        .mount(&server)
+        .await;
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_profile_web_token";
+    let mut expired_profile = profile(&format!("chatgpt-{account_id}"));
+    expired_profile.access_token_expires_at =
+        Some(chrono::Utc::now() - chrono::Duration::minutes(5));
+    store
+        .seed_oauth_credential(ImportCodexOAuthCredential {
+            account_id: account_id.to_owned(),
+            name: account_id.to_owned(),
+            secret: provider_openai::credential::CodexOAuthSecret {
+                access_token: secrecy::SecretString::from("at-expired".to_owned()),
+                refresh_token: None,
+                id_token: None,
+                web_access_token: Some(secrecy::SecretString::from(
+                    "ey-web-session-token".to_owned(),
+                )),
+            },
+            verified_account: expired_profile,
+            next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
+            enabled: true,
+        })
+        .await;
+    let service = CodexCredentialProfileService::new(
+        store.repository(),
+        wire_profile(),
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+    let account_id = ProviderAccountId::new(account_id).expect("account ID");
+
+    let statistics = service
+        .profile_statistics(&account_id)
+        .await
+        .expect("profile statistics via web access token");
+
+    assert_eq!(statistics.display_name.as_deref(), Some("Web"));
+    let received = server
+        .received_requests()
+        .await
+        .expect("received profile requests");
+    let authorization = received
+        .iter()
+        .find_map(|request| {
+            request
+                .headers
+                .get("authorization")
+                .map(|value| value.to_str().expect("header value").to_owned())
+        })
+        .expect("authorization header present");
+    assert_eq!(authorization, "Bearer ey-web-session-token");
+}
+
+#[tokio::test]
 async fn profile_statistics_keeps_profile_when_stats_are_unavailable() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
