@@ -11,6 +11,7 @@ import BaseModal from '@/components/base/BaseModal/index.vue'
 import BaseTextarea from '@/components/base/BaseTextarea.vue'
 import { toast } from '@/components/base/BaseToast'
 import { errorMessage } from '@/utils/async'
+import { extractWebAccessToken } from '../utils/webAccessToken'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
 
@@ -38,10 +39,15 @@ async function handleSave(clear = false) {
   if (!props.account || saving.value)
     return
 
-  const tokenToSubmit = clear ? null : webAccessToken.value.trim()
-  if (!clear && !tokenToSubmit) {
-    actionError.value = '请输入网页 Access Token'
-    return
+  let tokenToSubmit: string | null = null
+  if (!clear) {
+    try {
+      tokenToSubmit = extractWebAccessToken(webAccessToken.value)
+    }
+    catch (error) {
+      actionError.value = errorMessage(error)
+      return
+    }
   }
 
   saving.value = true
@@ -110,12 +116,12 @@ async function handleSave(clear = false) {
 
       <BaseFormItem
         label="网页 Access Token"
-        description="登录 chatgpt.com 后，在浏览器打开 https://chatgpt.com/api/auth/session 即可复制 accessToken 字段值（以 ey... 开头）。"
+        description="可直接粘贴裸 Token、Bearer Token，或完整的 /api/auth/session JSON；系统会自动提取 accessToken，并忽略 sessionToken。"
       >
         <BaseTextarea
           v-model="webAccessToken"
           :rows="4"
-          placeholder="粘贴以 ey... 开头的网页 Access Token"
+          placeholder="粘贴 Token、Bearer Token 或完整的 /api/auth/session JSON"
           :disabled="saving"
         />
       </BaseFormItem>
