@@ -37,6 +37,7 @@ export function useSettingsForm() {
 
     rotationStrategy: '' as RotationStrategy | '',
     codexSessionAffinityEnabled: true,
+    roundRobinCrossWeightEnabled: false,
     minCodexDesktopVersion: '',
     minCodexCliVersion: '',
     usageRetentionDays: 31,
@@ -122,6 +123,7 @@ export function useSettingsForm() {
 
     form.rotationStrategy = data.rotationStrategy
     form.codexSessionAffinityEnabled = data.codexSessionAffinityEnabled
+    form.roundRobinCrossWeightEnabled = data.roundRobinCrossWeightEnabled
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
     form.openaiClientProfile = data.openaiClientProfile
     form.xaiClientProfile = data.xaiClientProfile
@@ -268,6 +270,7 @@ export function useSettingsForm() {
         responsesMaxDecompressedBodyBytes: responsesMaxDecompressedBodyMiB * MIB,
         rotationStrategy,
         codexSessionAffinityEnabled: form.codexSessionAffinityEnabled,
+        roundRobinCrossWeightEnabled: form.roundRobinCrossWeightEnabled,
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
         minCodexCliVersion: form.minCodexCliVersion.trim() || null,
         usageRetentionDays: form.usageRetentionDays,

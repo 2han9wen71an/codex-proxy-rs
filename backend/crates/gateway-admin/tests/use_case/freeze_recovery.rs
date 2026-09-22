@@ -40,6 +40,7 @@ fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> Runti
         concurrency_wait_timeout_seconds: 30,
         responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: gateway_admin::model::settings::RotationStrategy::Smart,
+        round_robin_cross_weight_enabled: false,
         codex_session_affinity_enabled: true,
         min_codex_desktop_version: None,
         min_codex_cli_version: None,

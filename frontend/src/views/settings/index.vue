@@ -17,6 +17,7 @@ import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestQueueCard from './components/RequestQueueCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
+import RoundRobinWeightCard from './components/RoundRobinWeightCard.vue'
 import SessionAffinityCard from './components/SessionAffinityCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 import SettingsAccessSection from './components/SettingsAccessSection.vue'
@@ -153,6 +154,7 @@ watch(section, (value) => {
             v-model:request-interval-ms="requestIntervalMsValue"
           />
           <RotationStrategyCard v-model="form.rotationStrategy" :options="rotationOptions" />
+          <RoundRobinWeightCard v-model:enabled="form.roundRobinCrossWeightEnabled" />
           <SessionAffinityCard v-model:enabled="form.codexSessionAffinityEnabled" />
           <RequestQueueCard
             v-model:max-waiting-per-key="maxWaitingPerKeyValue"

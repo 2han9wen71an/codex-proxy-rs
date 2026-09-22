@@ -24,6 +24,7 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: "smart".to_owned(),
         codex_session_affinity_enabled: true,
+        round_robin_cross_weight_enabled: false,
         model_mappings: BTreeMap::from([
             ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
             ("grok-latest".to_owned(), "grok-4.5".to_owned()),
