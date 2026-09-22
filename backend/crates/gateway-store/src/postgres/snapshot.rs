@@ -34,6 +34,7 @@ pub struct SnapshotRuntimeSettings {
     pub concurrency_wait_timeout_seconds: u32,
     pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
+    pub codex_session_affinity_enabled: bool,
     pub model_mappings: BTreeMap<String, String>,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
@@ -168,6 +169,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                 data.settings.request_location,
                 data.settings.request_location_enabled,
             )
+            .with_codex_session_affinity(data.settings.codex_session_affinity_enabled)
             .with_concurrency_queues(
                 data.settings.max_waiting_per_key,
                 data.settings.max_waiting_per_account,
@@ -255,6 +257,7 @@ struct SnapshotSettingsRow {
     max_concurrent_per_account: i64,
     request_interval_ms: i64,
     rotation_strategy: String,
+    codex_session_affinity_enabled: bool,
     model_mappings_json: sqlx::types::Json<BTreeMap<String, String>>,
     min_codex_desktop_version: Option<String>,
     min_codex_cli_version: Option<String>,
@@ -272,7 +275,7 @@ async fn load_settings(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> StoreResult<(Revision, SnapshotRuntimeSettings)> {
     let row = sqlx::query_as::<_, SnapshotSettingsRow>(
-        "select config_revision, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
+        "select config_revision, refresh_margin_seconds, refresh_concurrency, max_concurrent_per_account, request_interval_ms, rotation_strategy, codex_session_affinity_enabled, model_mappings_json, min_codex_desktop_version, min_codex_cli_version, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds, request_location_json, request_location_enabled, responses_max_decompressed_body_bytes, provider_request_profiles_json, pricing_overrides_json, pricing_synced_json from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
     .await
@@ -303,6 +306,7 @@ async fn load_settings(
             max_concurrent_per_account: to_u32(row.max_concurrent_per_account)?,
             request_interval_ms: to_u64(row.request_interval_ms)?,
             rotation_strategy: row.rotation_strategy,
+            codex_session_affinity_enabled: row.codex_session_affinity_enabled,
             model_mappings: row.model_mappings_json.0,
             min_codex_desktop_version: row.min_codex_desktop_version,
             min_codex_cli_version: row.min_codex_cli_version,

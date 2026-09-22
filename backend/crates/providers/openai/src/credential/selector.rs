@@ -482,7 +482,14 @@ impl CodexCredentialSelector {
                 return Err(CredentialSelectionError::NoEligibleCredential);
             }
             let pinned_account = required_account.or_else(|| continuation_account.clone());
-            let mut affinity = if diagnostic {
+            let mut affinity = if diagnostic
+                || !request
+                    .attempt
+                    .account_selection_policy()
+                    .codex_session_affinity_enabled()
+            {
+                // 关闭会话亲和（或诊断探测）时不读取会话绑定：调度策略逐请求生效，
+                // required_account/continuation pin 仍在 pinned_account 路径生效。
                 AffinitySelection::default()
             } else {
                 self.resolve_session_affinity(
@@ -631,6 +638,7 @@ impl CodexCredentialSelector {
                     }
                     ProviderLeaseAcquisition::Acquired(guard) => {
                         let initial_affinity_claim = if !diagnostic
+                            && policy.codex_session_affinity_enabled()
                             && observed_affinity_account.is_none()
                             && let Some(key) = request.session_affinity_key
                         {
@@ -708,6 +716,7 @@ impl CodexCredentialSelector {
                             })
                             .collect();
                         if !diagnostic
+                            && policy.codex_session_affinity_enabled()
                             && observed_affinity_account.as_ref() == Some(account.id())
                             && let Some(key) = request.session_affinity_key
                         {

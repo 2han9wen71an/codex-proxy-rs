@@ -106,6 +106,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 concurrency_wait_timeout_seconds: 30,
                 responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
                 rotation_strategy: RotationStrategy::Smart,
+                codex_session_affinity_enabled: true,
                 min_codex_desktop_version: None,
                 min_codex_cli_version: None,
                 usage_retention_days: 31,
