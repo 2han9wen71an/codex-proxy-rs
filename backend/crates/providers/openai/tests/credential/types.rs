@@ -100,7 +100,7 @@ fn provider_schema_rejects_unknown_public_layer_fields() {
 }
 
 #[test]
-fn reset_credits_authorization_header_prefers_web_access_token() {
+fn management_authorization_header_prefers_web_access_token() {
     use provider_openai::credential::CodexCredentialCodec;
 
     let credential = CodexCredentialCodec::encode_complete(CodexCredentialData::OAuth(
@@ -130,11 +130,11 @@ fn reset_credits_authorization_header_prefers_web_access_token() {
         "Bearer at-openai-pat"
     );
 
-    // Reset credits uses web access token (ey-...)
+    // Management endpoints (reset credits, profile) use web access token (ey-...)
     assert_eq!(
         decoded
             .authentication
-            .reset_credits_authorization_header()
+            .management_authorization_header()
             .unwrap()
             .expose_secret(),
         "Bearer ey-web-access-token"
@@ -142,7 +142,7 @@ fn reset_credits_authorization_header_prefers_web_access_token() {
 }
 
 #[test]
-fn reset_credits_authorization_header_falls_back_to_access_token_when_web_token_is_missing() {
+fn management_authorization_header_falls_back_to_access_token_when_web_token_is_missing() {
     use provider_openai::credential::CodexCredentialCodec;
 
     let credential = CodexCredentialCodec::encode_complete(CodexCredentialData::OAuth(
@@ -173,7 +173,7 @@ fn reset_credits_authorization_header_falls_back_to_access_token_when_web_token_
     assert_eq!(
         decoded
             .authentication
-            .reset_credits_authorization_header()
+            .management_authorization_header()
             .unwrap()
             .expose_secret(),
         "Bearer ey-standard-oauth"

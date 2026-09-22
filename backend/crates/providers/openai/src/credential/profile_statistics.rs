@@ -225,22 +225,30 @@ impl CodexCredentialProfileService {
             })?
             .filter(|account| account.provider().as_str() == "openai")
             .ok_or(CodexProfileStatisticsError::NotFound)?;
-        if account
-            .access_token_expires_at()
-            .is_some_and(|expires_at| expires_at <= SystemTime::now())
-        {
-            return Err(CodexProfileStatisticsError::CredentialRefreshRequired {
-                upstream_body: None,
-            });
-        }
         let credential = self
             .repository
             .load_runtime_credential(&account)
             .await
             .map_err(|_| CodexProfileStatisticsError::InvalidCredentialData)?;
+        // 管理端资料查询与重置卡同源（profiles/me 等账号维度端点），接受网页会话
+        // 凭据：配置了 web access token 的账号（如无法刷新 OAuth 的 PAT）即使主
+        // access_token 已过期也应放行，由 web token 承担认证。
+        let has_web_token = credential
+            .authentication
+            .oauth()
+            .is_some_and(|oauth| oauth.web_access_token.is_some());
+        if !has_web_token
+            && account
+                .access_token_expires_at()
+                .is_some_and(|expires_at| expires_at <= SystemTime::now())
+        {
+            return Err(CodexProfileStatisticsError::CredentialRefreshRequired {
+                upstream_body: None,
+            });
+        }
         let authorization = credential
             .authentication
-            .authorization_header()
+            .management_authorization_header()
             .map_err(|_| CodexProfileStatisticsError::InvalidCredentialData)?;
         Ok((
             authorization,

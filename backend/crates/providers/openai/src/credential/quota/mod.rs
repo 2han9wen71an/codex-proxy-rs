@@ -1342,7 +1342,7 @@ async fn list_reset_credits_once(
     let authorization = prepared
         .credential
         .authentication
-        .reset_credits_authorization_header()
+        .management_authorization_header()
         .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
     client
         .for_account(&prepared.account)
@@ -1373,7 +1373,7 @@ async fn consume_reset_credit_once(
     let authorization = prepared
         .credential
         .authentication
-        .reset_credits_authorization_header()
+        .management_authorization_header()
         .map_err(|_| ResetCreditAttemptError::InvalidCredential)?;
     client
         .for_account(&prepared.account)

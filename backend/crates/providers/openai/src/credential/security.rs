@@ -58,9 +58,10 @@ impl CodexRuntimeAuthentication {
         }
     }
 
-    /// 专用于主动额度重置卡（wham/rate-limit-reset-credits）的认证头。
-    /// 若配置了独立的网页 Access Token，则优先使用它；否则回退到主 access_token。
-    pub fn reset_credits_authorization_header(
+    /// 管理端账号操作（重置卡、个人资料等账号维度端点）的认证头。
+    /// 这些端点接受网页会话凭据；若配置了独立的网页 Access Token，
+    /// 则优先使用它；否则回退到主 access_token。
+    pub fn management_authorization_header(
         &self,
     ) -> Result<SecretString, CodexCredentialDataError> {
         match self {
