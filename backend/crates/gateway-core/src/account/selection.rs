@@ -736,7 +736,6 @@ pub(crate) const SMART_SCORE_TOLERANCE: f64 = 0.05;
 // 首输出 10 秒时延迟得分减半；固定尺度不随其他候选账号变化。
 const SMART_LATENCY_HALF_SCORE_MS: f64 = 10_000.0;
 
-<<<<<<< HEAD
 fn capacity_utilization(
     candidate: &AccountCandidate,
     default_concurrency: AccountConcurrency,
@@ -748,7 +747,8 @@ fn capacity_utilization(
         .map_or(0.0, |limit| {
             f64::from(candidate.signals.in_flight) / f64::from(limit.get())
         })
-=======
+}
+
 fn select_round_robin_candidate<'a>(
     candidates: &[&'a AccountCandidate],
     cursor: u64,
@@ -776,17 +776,6 @@ fn select_round_robin_candidate<'a>(
         slot -= weight;
     }
     None
-}
-
-fn capacity_utilization(candidate: &AccountCandidate, default_concurrency: NonZeroU32) -> f64 {
-    f64::from(candidate.signals.in_flight)
-        / f64::from(
-            candidate
-                .account
-                .effective_concurrency(default_concurrency)
-                .get(),
-        )
->>>>>>> origin/feat/codex-session-affinity-toggle
 }
 
 fn select_smart_candidate<'a>(

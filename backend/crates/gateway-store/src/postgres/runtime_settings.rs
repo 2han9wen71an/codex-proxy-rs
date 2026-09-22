@@ -444,21 +444,33 @@ pub(crate) async fn update_runtime_settings_in_transaction(
 	    .bind(i64::from(update.max_waiting_per_key))
 	    .bind(i64::from(update.max_waiting_per_account))
 	    .bind(i64::from(update.concurrency_wait_timeout_seconds))
-	    .bind(update.account_auto_freeze_enabled)
-	    .bind(i64::from(update.account_auto_freeze_threshold))
-	    .bind(i64::try_from(update.account_auto_freeze_window_seconds).map_err(|_| invalid_numeric())?)
-	    .bind(
-	    .bind(update.account_auto_freeze_probe_enabled)
-	    .bind(update.account_auto_freeze_probe_model.as_deref())
-	    .bind(update.account_auto_freeze_adaptive_concurrency)
-	    .bind(sqlx::types::Json(
-	    .bind(update.request_location_enabled)
-	    .bind(
-	    .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
-	    .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
-	    .bind(update.account_warmup_enabled)
-	    .bind(&update.account_warmup_schedule_time)
-	    .bind(update.account_warmup_model.as_deref())
+    .bind(update.account_auto_freeze_enabled)
+    .bind(i64::from(update.account_auto_freeze_threshold))
+    .bind(i64::try_from(update.account_auto_freeze_window_seconds).map_err(|_| invalid_numeric())?)
+    .bind(
+        i64::try_from(update.account_auto_freeze_duration_seconds)
+            .map_err(|_| invalid_numeric())?,
+    )
+    .bind(update.account_auto_freeze_probe_enabled)
+    .bind(update.account_auto_freeze_probe_model.as_deref())
+    .bind(update.account_auto_freeze_adaptive_concurrency)
+    .bind(sqlx::types::Json(
+        update
+            .request_location
+            .clone()
+            .normalized()
+            .map_err(|_| invalid_location())?,
+    ))
+    .bind(update.request_location_enabled)
+    .bind(
+        i64::try_from(update.responses_max_decompressed_body_bytes)
+            .map_err(|_| invalid_numeric())?,
+    )
+    .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+    .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
+    .bind(update.account_warmup_enabled)
+    .bind(&update.account_warmup_schedule_time)
+    .bind(update.account_warmup_model.as_deref())
     .bind(update.codex_session_affinity_enabled)
     .bind(update.round_robin_cross_weight_enabled)
     .fetch_optional(&mut **transaction)
