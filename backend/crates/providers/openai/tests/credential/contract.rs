@@ -105,6 +105,10 @@ fn attempt_with_required(
 }
 
 fn round_robin_attempt() -> AttemptContext {
+    round_robin_attempt_with_affinity(true)
+}
+
+fn round_robin_attempt_with_affinity(enabled: bool) -> AttemptContext {
     AttemptContext::new(
         RequestAttemptContext::new(
             ModelRequestId::new("req_codex_round_robin").expect("request id"),
@@ -116,7 +120,8 @@ fn round_robin_attempt() -> AttemptContext {
             RotationStrategy::RoundRobin,
             NonZeroU32::new(2).expect("concurrency"),
             Duration::ZERO,
-        ),
+        )
+        .with_codex_session_affinity(enabled),
         AccountAttemptContext::new(BTreeSet::new(), None, None)
             .with_account_scope(contract_account_scope()),
         None,
@@ -657,6 +662,88 @@ fn selector_round_robin_cursor_advances_across_requests() {
         selected,
         ["acct_first", "acct_second", "acct_first", "acct_second"]
     );
+}
+
+#[tokio::test]
+async fn round_robin_without_session_affinity_keeps_rotating_within_one_session() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let selector = selector_with_affinity(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::clone(&affinity),
+    );
+    let key = ProviderSessionAffinityKey::try_new("affinity-off-session").expect("affinity key");
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let mut selected = Vec::new();
+
+    for _ in 0..4 {
+        let attempt = round_robin_attempt_with_affinity(false);
+        let lease = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: Some(&key),
+            })
+            .await
+            .expect("select account with affinity disabled");
+        selected.push(lease.account_id().as_str().to_owned());
+    }
+
+    assert_eq!(
+        selected,
+        ["acct_first", "acct_second", "acct_first", "acct_second"],
+        "每请求轮询，不再被会话绑定固定到首个账号"
+    );
+    assert!(
+        affinity.lookup_keys().is_empty(),
+        "关闭亲和后不得读取会话绑定"
+    );
+    assert!(
+        affinity.binding_count() == 0 && affinity.renewal_ttls().is_empty(),
+        "关闭亲和后不得写入或续期会话绑定"
+    );
+}
+
+#[tokio::test]
+async fn round_robin_with_session_affinity_pins_the_first_selected_account() {
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, "acct_first", "at-first");
+    create_account(&store, "acct_second", "at-second");
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let selector = selector_with_affinity(
+        &store,
+        Arc::new(TestLeaseCoordinator::default()),
+        Arc::clone(&affinity),
+    );
+    let key = ProviderSessionAffinityKey::try_new("affinity-on-session").expect("affinity key");
+    let request_url =
+        Url::parse("https://chatgpt.com/backend-api/codex/responses").expect("request URL");
+    let mut selected = Vec::new();
+
+    for _ in 0..2 {
+        let attempt = round_robin_attempt_with_affinity(true);
+        let lease = selector
+            .select(&SelectCodexCredential {
+                upstream_model: "gpt-5.4",
+                request_url: &request_url,
+                attempt: &attempt,
+                session_affinity_key: Some(&key),
+            })
+            .await
+            .expect("select account with affinity enabled");
+        selected.push(lease.account_id().as_str().to_owned());
+    }
+
+    assert_eq!(
+        selected[0], selected[1],
+        "开启亲和时会话内固定复用首次选中的账号"
+    );
+    assert!(affinity.binding_count() > 0, "开启亲和时要写入会话绑定");
 }
 
 #[tokio::test]

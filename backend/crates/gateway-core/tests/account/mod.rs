@@ -399,7 +399,6 @@ fn selector_should_prioritize_the_highest_weight_for_every_rotation_strategy() {
     for strategy in [
         RotationStrategy::Smart,
         RotationStrategy::QuotaResetPriority,
-        RotationStrategy::RoundRobin,
         RotationStrategy::Sticky,
     ] {
         let selected = AccountSelector
@@ -411,6 +410,48 @@ fn selector_should_prioritize_the_highest_weight_for_every_rotation_strategy() {
             "strategy {strategy:?} must select inside the highest weight tier"
         );
     }
+}
+
+#[test]
+fn round_robin_cross_weight_should_use_weighted_slots() {
+    let candidates = vec![
+        weighted_candidate("acct_b", 1, 0),
+        weighted_candidate("acct_a", 2, 0),
+    ];
+    let mut context = context(RotationStrategy::RoundRobin);
+    context.policy = context.policy.with_round_robin_cross_weight(true);
+
+    let selected = (0..6)
+        .map(|cursor| {
+            context.round_robin_cursor = cursor;
+            AccountSelector
+                .select(&candidates, &context)
+                .expect("weighted candidate available")
+                .candidate()
+                .account
+                .id()
+                .as_str()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        selected,
+        ["acct_a", "acct_a", "acct_b", "acct_a", "acct_a", "acct_b"]
+    );
+}
+
+#[test]
+fn round_robin_cross_weight_should_keep_non_round_robin_weight_priority() {
+    let candidates = vec![
+        weighted_candidate("acct_b", 1, 0),
+        weighted_candidate("acct_a", 2, 0),
+    ];
+    let context = context(RotationStrategy::Smart);
+    let selected = AccountSelector
+        .select(&candidates, &context)
+        .expect("weighted candidate available");
+    assert_eq!(selected.candidate().account.id().as_str(), "acct_a");
 }
 
 #[test]

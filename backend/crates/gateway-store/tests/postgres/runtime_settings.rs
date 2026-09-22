@@ -23,6 +23,8 @@ fn settings_with_margin(refresh_margin_seconds: u64) -> RuntimeSettingsUpdate {
         concurrency_wait_timeout_seconds: 30,
         responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: "smart".to_owned(),
+        codex_session_affinity_enabled: true,
+        round_robin_cross_weight_enabled: false,
         model_mappings: BTreeMap::from([
             ("gpt-5.4".to_owned(), "gpt-5.5".to_owned()),
             ("grok-latest".to_owned(), "grok-4.5".to_owned()),
@@ -186,6 +188,32 @@ async fn client_min_versions_should_round_trip_as_nullable_settings() {
         Some("26.825.6671")
     );
     assert_eq!(settings.min_codex_cli_version.as_deref(), Some("0.40.0"));
+    database.close().await;
+}
+
+#[tokio::test]
+async fn codex_session_affinity_defaults_on_and_round_trips_into_the_snapshot() {
+    use gateway_store::postgres::{PgRuntimeSnapshotRepository, RuntimeSnapshotRepository};
+    let Some(database) = TestDatabase::create("codex_session_affinity").await else {
+        return;
+    };
+    let repository = PgRuntimeSettingsRepository::new(database.pool.clone());
+    let before = repository.load_runtime_settings().await.unwrap();
+    assert!(
+        before.codex_session_affinity_enabled,
+        "默认保持既有亲和行为"
+    );
+    let mut update = settings_with_margin(3600);
+    update.codex_session_affinity_enabled = false;
+    repository.update_runtime_settings(update).await.unwrap();
+    let settings = repository.load_runtime_settings().await.unwrap();
+    let snapshot = PgRuntimeSnapshotRepository::new(database.pool.clone())
+        .load_runtime_snapshot()
+        .await
+        .unwrap();
+    assert!(!settings.codex_session_affinity_enabled);
+    assert!(!snapshot.settings.codex_session_affinity_enabled);
+    assert!(snapshot.config_revision > before.config_revision);
     database.close().await;
 }
 

@@ -41,6 +41,8 @@ pub struct SnapshotSettingsFacts {
     responses_max_decompressed_body_bytes: u64,
     request_interval_ms: u64,
     rotation_strategy: String,
+    codex_session_affinity_enabled: bool,
+    round_robin_cross_weight_enabled: bool,
     model_mappings: BTreeMap<String, String>,
     min_codex_desktop_version: Option<String>,
     min_codex_cli_version: Option<String>,
@@ -80,6 +82,18 @@ impl SnapshotSettingsFacts {
     }
 
     #[must_use]
+    pub const fn with_codex_session_affinity(mut self, enabled: bool) -> Self {
+        self.codex_session_affinity_enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_round_robin_cross_weight(mut self, enabled: bool) -> Self {
+        self.round_robin_cross_weight_enabled = enabled;
+        self
+    }
+
+    #[must_use]
     pub const fn with_concurrency_queues(
         mut self,
         max_waiting_per_key: u32,
@@ -113,6 +127,8 @@ impl SnapshotSettingsFacts {
             responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
             request_interval_ms,
             rotation_strategy: rotation_strategy.into(),
+            codex_session_affinity_enabled: true,
+            round_robin_cross_weight_enabled: false,
             model_mappings,
             min_codex_desktop_version,
             min_codex_cli_version,
@@ -479,6 +495,8 @@ async fn compile_runtime_snapshot(
         AccountConcurrency::new(facts.settings.max_concurrent_per_account),
         Duration::from_millis(facts.settings.request_interval_ms),
     )
+    .with_codex_session_affinity(facts.settings.codex_session_affinity_enabled)
+    .with_round_robin_cross_weight(facts.settings.round_robin_cross_weight_enabled)
     .with_queue(ConcurrencyQueuePolicy {
         max_waiting: facts.settings.max_waiting_per_account,
         timeout: queue_timeout,

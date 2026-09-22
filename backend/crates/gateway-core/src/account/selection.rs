@@ -50,6 +50,8 @@ pub struct AccountSelectionPolicy {
     max_concurrent_per_account: AccountConcurrency,
     request_interval: Duration,
     queue_policy: ConcurrencyQueuePolicy,
+    codex_session_affinity_enabled: bool,
+    round_robin_cross_weight_enabled: bool,
 }
 
 impl AccountSelectionPolicy {
@@ -67,12 +69,38 @@ impl AccountSelectionPolicy {
                 max_waiting: 0,
                 timeout: Duration::ZERO,
             },
+            codex_session_affinity_enabled: true,
+            round_robin_cross_weight_enabled: false,
         }
+    }
+
+    /// 关闭 Codex 会话亲和后，Provider 不再按会话绑定账号；调度策略逐请求生效。
+    #[must_use]
+    pub const fn with_codex_session_affinity(mut self, enabled: bool) -> Self {
+        self.codex_session_affinity_enabled = enabled;
+        self
     }
 
     #[must_use]
     pub const fn with_queue(mut self, policy: ConcurrencyQueuePolicy) -> Self {
         self.queue_policy = policy;
+        self
+    }
+
+    #[must_use]
+    pub const fn codex_session_affinity_enabled(self) -> bool {
+        self.codex_session_affinity_enabled
+    }
+
+    /// RoundRobin 是否跨越账号权重档位，并按权重比例分配请求。
+    #[must_use]
+    pub const fn round_robin_cross_weight_enabled(self) -> bool {
+        self.round_robin_cross_weight_enabled
+    }
+
+    #[must_use]
+    pub const fn with_round_robin_cross_weight(mut self, enabled: bool) -> Self {
+        self.round_robin_cross_weight_enabled = enabled;
         self
     }
 
@@ -562,7 +590,11 @@ impl AccountSelector {
         } else {
             PreferredAccountSelection::NotRequested
         };
-        eligible.retain(|candidate| candidate.account.weight() == highest_weight);
+        let cross_weight_round_robin = context.policy.strategy() == RotationStrategy::RoundRobin
+            && context.policy.round_robin_cross_weight_enabled();
+        if !cross_weight_round_robin {
+            eligible.retain(|candidate| candidate.account.weight() == highest_weight);
+        }
 
         let candidate = match context.policy.strategy() {
             RotationStrategy::QuotaResetPriority => {
@@ -589,11 +621,11 @@ impl AccountSelector {
                 });
                 eligible.first().copied()?
             }
-            RotationStrategy::RoundRobin => {
-                eligible.sort_by_key(|candidate| candidate.account.id().clone());
-                let index = context.round_robin_cursor as usize % eligible.len();
-                eligible.get(index).copied()?
-            }
+            RotationStrategy::RoundRobin => select_round_robin_candidate(
+                &eligible,
+                context.round_robin_cursor,
+                cross_weight_round_robin,
+            )?,
             RotationStrategy::Smart => select_smart_candidate(
                 &eligible,
                 context.policy.max_concurrent_per_account(),
@@ -704,6 +736,7 @@ pub(crate) const SMART_SCORE_TOLERANCE: f64 = 0.05;
 // 首输出 10 秒时延迟得分减半；固定尺度不随其他候选账号变化。
 const SMART_LATENCY_HALF_SCORE_MS: f64 = 10_000.0;
 
+<<<<<<< HEAD
 fn capacity_utilization(
     candidate: &AccountCandidate,
     default_concurrency: AccountConcurrency,
@@ -715,6 +748,45 @@ fn capacity_utilization(
         .map_or(0.0, |limit| {
             f64::from(candidate.signals.in_flight) / f64::from(limit.get())
         })
+=======
+fn select_round_robin_candidate<'a>(
+    candidates: &[&'a AccountCandidate],
+    cursor: u64,
+    cross_weight: bool,
+) -> Option<&'a AccountCandidate> {
+    let mut candidates = candidates.to_vec();
+    candidates.sort_by_key(|candidate| candidate.account.id().clone());
+    if !cross_weight {
+        return candidates
+            .get((cursor as usize) % candidates.len())
+            .copied();
+    }
+    let total_slots = candidates.iter().fold(0_u64, |total, candidate| {
+        total.saturating_add(u64::from(candidate.account.weight().get()))
+    });
+    if total_slots == 0 {
+        return None;
+    }
+    let mut slot = cursor % total_slots;
+    for candidate in candidates {
+        let weight = u64::from(candidate.account.weight().get());
+        if slot < weight {
+            return Some(candidate);
+        }
+        slot -= weight;
+    }
+    None
+}
+
+fn capacity_utilization(candidate: &AccountCandidate, default_concurrency: NonZeroU32) -> f64 {
+    f64::from(candidate.signals.in_flight)
+        / f64::from(
+            candidate
+                .account
+                .effective_concurrency(default_concurrency)
+                .get(),
+        )
+>>>>>>> origin/feat/codex-session-affinity-toggle
 }
 
 fn select_smart_candidate<'a>(

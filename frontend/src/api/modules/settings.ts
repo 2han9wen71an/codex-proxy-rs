@@ -21,6 +21,8 @@ export interface RuntimeSettings {
   concurrencyWaitTimeoutSeconds: number
   responsesMaxDecompressedBodyBytes: number
   rotationStrategy: RotationStrategy
+  codexSessionAffinityEnabled: boolean
+  roundRobinCrossWeightEnabled: boolean
   minCodexDesktopVersion: string | null
   minCodexCliVersion: string | null
   usageRetentionDays: number
