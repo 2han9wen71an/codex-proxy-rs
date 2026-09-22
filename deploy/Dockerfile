@@ -4,12 +4,22 @@
 # 版本严格一致。升级数据库版本时只需同步修改这里与 deploy/compose.yaml。
 ARG POSTGRES_IMAGE=postgres:18-bookworm@sha256:d9c83446333daec3f0588cc709adb80c26090b7f9f0f7ec8d43c243385d79818
 
-FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS frontend-builder
+FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb AS ui-builder
+
+# 本地拆分阶段通过显式命名 context 传入 UI 仓库，不复制回宿主源码树。
+# 首次 UI 发版并移除本地 pnpm override 后，此阶段可随之移除。
+WORKDIR /codex-proxy-ui
+COPY --from=codex-proxy-ui /package.json /pnpm-lock.yaml /pnpm-workspace.yaml ./
+RUN npm install --global pnpm@11.7.0 && pnpm install --frozen-lockfile
+COPY --from=codex-proxy-ui /src ./src
+COPY --from=codex-proxy-ui /vite.config.ts /tsconfig.json /tsconfig.build.json /env.d.ts ./
+RUN pnpm build
+
+FROM ui-builder AS frontend-builder
 
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
-RUN npm install --global pnpm@11.7.0 \
-    && pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 COPY frontend ./
 RUN pnpm build
 
@@ -88,5 +98,9 @@ ARG CPR_PREBUILT_DIR=dist/docker
 
 COPY --chown=cpr:cpr ${CPR_PREBUILT_DIR}/linux-${TARGETARCH}/codex-proxy-rs /app/bin/codex-proxy-rs
 COPY --chown=cpr:cpr ${CPR_PREBUILT_DIR}/web/dist ./web/dist
-RUN chmod +x /app/bin/codex-proxy-rs
+COPY --chown=cpr:cpr ${CPR_PREBUILT_DIR}/linux-${TARGETARCH}/plugins/official /app/bin/plugins/official
+RUN chmod +x /app/bin/codex-proxy-rs \
+    && find /app/bin/plugins/official -type f -exec chmod 0444 '{}' + \
+    && chmod 0555 /app/bin/plugins/official \
+    && chmod 0755 /app/bin/plugins
 USER cpr

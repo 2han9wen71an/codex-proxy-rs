@@ -1,4 +1,5 @@
 autoInstallPeers: false
 
-minimumReleaseAgeExclude:
-  - vite@8.1.3
+# 首次公开发布前的同级仓库联调覆盖；发布后移除此项并生成 registry 锁文件。
+overrides:
+  '@codex-proxy/ui': link:../../codex-proxy-ui

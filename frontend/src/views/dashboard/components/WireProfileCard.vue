@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { Openai, Xai } from '@boxicons/vue'
-import { Box, CheckCircle2, Monitor, RefreshCw, ShieldCheck, Terminal, TriangleAlert } from '@lucide/vue'
+import { BaseCard, BaseEmpty, BaseSegmented } from '@codex-proxy/ui'
 
+import { Box, CheckCircle2, Monitor, RefreshCw, ShieldCheck, Terminal, TriangleAlert } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
-import BaseCard from '@/components/base/BaseCard.vue'
-import BaseEmpty from '@/components/base/BaseEmpty.vue'
-import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import { formatDateTime } from '@/utils/date'
 import { formatProviderLabel } from '@/utils/providers'
 
