@@ -101,6 +101,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 responses_max_decompressed_body_bytes: command
                     .responses_max_decompressed_body_bytes,
                 rotation_strategy: command.rotation_strategy.as_str().to_owned(),
+                codex_session_affinity_enabled: command.codex_session_affinity_enabled,
                 model_mappings: store_model_mappings(command.model_mappings),
                 min_codex_desktop_version: command.min_codex_desktop_version,
                 min_codex_cli_version: command.min_codex_cli_version,
@@ -135,6 +136,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "concurrency_wait_timeout_seconds".to_owned(),
                     "responses_max_decompressed_body_bytes".to_owned(),
                     "rotation_strategy".to_owned(),
+                    "codex_session_affinity_enabled".to_owned(),
                     "min_codex_desktop_version".to_owned(),
                     "min_codex_cli_version".to_owned(),
                     "retention".to_owned(),
@@ -247,6 +249,7 @@ pub(crate) fn admin_runtime_settings(
         concurrency_wait_timeout_seconds: settings.concurrency_wait_timeout_seconds,
         responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
         rotation_strategy,
+        codex_session_affinity_enabled: settings.codex_session_affinity_enabled,
         min_codex_desktop_version: settings.min_codex_desktop_version,
         min_codex_cli_version: settings.min_codex_cli_version,
         usage_retention_days: settings.usage_retention_days,

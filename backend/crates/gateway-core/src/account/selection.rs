@@ -51,6 +51,7 @@ pub struct AccountSelectionPolicy {
     max_concurrent_per_account: NonZeroU32,
     request_interval: Duration,
     queue_policy: ConcurrencyQueuePolicy,
+    codex_session_affinity_enabled: bool,
 }
 
 impl AccountSelectionPolicy {
@@ -68,13 +69,26 @@ impl AccountSelectionPolicy {
                 max_waiting: 0,
                 timeout: Duration::ZERO,
             },
+            codex_session_affinity_enabled: true,
         }
+    }
+
+    /// 关闭 Codex 会话亲和后，Provider 不再按会话绑定账号；调度策略逐请求生效。
+    #[must_use]
+    pub const fn with_codex_session_affinity(mut self, enabled: bool) -> Self {
+        self.codex_session_affinity_enabled = enabled;
+        self
     }
 
     #[must_use]
     pub const fn with_queue(mut self, policy: ConcurrencyQueuePolicy) -> Self {
         self.queue_policy = policy;
         self
+    }
+
+    #[must_use]
+    pub const fn codex_session_affinity_enabled(self) -> bool {
+        self.codex_session_affinity_enabled
     }
 
     #[must_use]

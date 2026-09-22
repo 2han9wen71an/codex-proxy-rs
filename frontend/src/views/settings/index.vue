@@ -16,6 +16,7 @@ import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RequestQueueCard from './components/RequestQueueCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
+import SessionAffinityCard from './components/SessionAffinityCard.vue'
 import RuntimeSettingsCard from './components/RuntimeSettingsCard.vue'
 import SettingsAccessSection from './components/SettingsAccessSection.vue'
 import TokenRefreshCard from './components/TokenRefreshCard.vue'
@@ -151,6 +152,7 @@ watch(section, (value) => {
             v-model:request-interval-ms="requestIntervalMsValue"
           />
           <RotationStrategyCard v-model="form.rotationStrategy" :options="rotationOptions" />
+          <SessionAffinityCard v-model:enabled="form.codexSessionAffinityEnabled" />
           <RequestQueueCard
             v-model:max-waiting-per-key="maxWaitingPerKeyValue"
             v-model:max-waiting-per-account="maxWaitingPerAccountValue"
