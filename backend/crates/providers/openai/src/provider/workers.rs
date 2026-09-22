@@ -379,7 +379,9 @@ impl ScheduledTask for OpenAiWarmupTask {
             let hour = china_now.time().hour();
             let minute = china_now.time().minute();
             let scheduled_times = policy.scheduled_times();
-            let matched = scheduled_times.iter().any(|&(h, m)| h == hour && m == minute);
+            let matched = scheduled_times
+                .iter()
+                .any(|&(h, m)| h == hour && m == minute);
             if !matched {
                 return Ok(());
             }
