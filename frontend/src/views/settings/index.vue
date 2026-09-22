@@ -10,6 +10,7 @@ import BaseSegmented from '@/components/base/BaseSegmented.vue'
 import BaseSelect from '@/components/base/BaseSelect.vue'
 
 import AccountAutoFreezeCard from './components/AccountAutoFreezeCard.vue'
+import AccountWarmupCard from './components/AccountWarmupCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientProfileCard from './components/ClientProfileCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
@@ -164,6 +165,11 @@ watch(section, (value) => {
             v-model:probe-enabled="form.accountAutoFreezeProbeEnabled"
             v-model:probe-model="form.accountAutoFreezeProbeModel"
             v-model:adaptive-concurrency="form.accountAutoFreezeAdaptiveConcurrency"
+          />
+          <AccountWarmupCard
+            v-model:enabled="form.accountWarmupEnabled"
+            v-model:schedule-time="form.accountWarmupScheduleTime"
+            v-model:model="form.accountWarmupModel"
           />
         </template>
 
