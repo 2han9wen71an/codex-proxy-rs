@@ -23,6 +23,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   consumed: [accountId: string]
+  accountUpdated: [account: Account]
 }>()
 
 dayjs.extend(utc)

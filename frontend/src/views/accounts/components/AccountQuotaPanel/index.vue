@@ -62,6 +62,7 @@ const profileOpen = shallowRef(false)
           v-if="account.provider === 'openai' && account.authenticationKind === 'oauth'"
           :account="account"
           @consumed="emit('quotaReset', $event)"
+          @account-updated="() => {}"
         />
         <BaseIconButton
           variant="ghost"
