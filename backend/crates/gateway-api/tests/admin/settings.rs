@@ -53,6 +53,7 @@ fn update_body() -> Value {
         "responsesMaxDecompressedBodyBytes": 67108864,
         "rotationStrategy": "round_robin",
         "codexSessionAffinityEnabled": true,
+        "roundRobinCrossWeightEnabled": true,
         "minCodexDesktopVersion": "26.825.6671",
         "minCodexCliVersion": "0.40.0",
         "usageRetentionDays": 32,
@@ -184,6 +185,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "responsesMaxDecompressedBodyBytes": 67108864,
             "rotationStrategy": "round_robin",
             "codexSessionAffinityEnabled": true,
+            "roundRobinCrossWeightEnabled": true,
             "minCodexDesktopVersion": "26.825.6671",
             "minCodexCliVersion": "0.40.0",
             "usageRetentionDays": 32,
@@ -193,13 +195,13 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
             "accountAutoFreezeThreshold": 12,
             "accountAutoFreezeWindowSeconds": 600,
             "accountAutoFreezeDurationSeconds": 7200,
-	            "accountAutoFreezeProbeEnabled": true,
-	            "accountAutoFreezeProbeModel": null,
-	            "accountAutoFreezeAdaptiveConcurrency": true,
-	            "accountWarmupEnabled": false,
-	            "accountWarmupScheduleTime": "08:00",
-	            "accountWarmupModel": null,
-	            "updatedAt": "2026-08-02T10:30:00Z"
+                "accountAutoFreezeProbeEnabled": true,
+                "accountAutoFreezeProbeModel": null,
+                "accountAutoFreezeAdaptiveConcurrency": true,
+                "accountWarmupEnabled": false,
+                "accountWarmupScheduleTime": "08:00",
+                "accountWarmupModel": null,
+                "updatedAt": "2026-08-02T10:30:00Z"
         })
     );
 }

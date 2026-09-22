@@ -184,13 +184,12 @@ impl UpdateRuntimeSettingsRequest {
             self.account_auto_freeze_probe_model.as_deref(),
             "accountAutoFreezeProbeModel",
         )?;
-        if !gateway_core::provider_ports::valid_warmup_schedule_time(&self.account_warmup_schedule_time) {
+        if !gateway_core::provider_ports::valid_warmup_schedule_time(
+            &self.account_warmup_schedule_time,
+        ) {
             return Err(WireValidationError::new("accountWarmupScheduleTime"));
         }
-        validate_optional_probe_model(
-            self.account_warmup_model.as_deref(),
-            "accountWarmupModel",
-        )?;
+        validate_optional_probe_model(self.account_warmup_model.as_deref(), "accountWarmupModel")?;
         Ok(())
     }
 

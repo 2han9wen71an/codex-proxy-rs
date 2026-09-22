@@ -957,9 +957,10 @@ impl CodexCredentialQuotaService {
         for account in accounts {
             if let Some(snapshot) = observed_snapshots.get(account.id()) {
                 // 1. 周线已触顶或耗尽跳过
-                let weekly_exhausted = snapshot.windows().iter().any(|w| {
-                    w.kind() == CodexQuotaWindowKind::Weekly && w.limit_reached()
-                });
+                let weekly_exhausted = snapshot
+                    .windows()
+                    .iter()
+                    .any(|w| w.kind() == CodexQuotaWindowKind::Weekly && w.limit_reached());
                 if weekly_exhausted {
                     summary.skipped_exhausted += 1;
                     continue;
@@ -967,8 +968,9 @@ impl CodexCredentialQuotaService {
                 // 2. 5h 窗口当前活跃且距重置时间 > 30 分钟跳过
                 let has_active_5h = snapshot.windows().iter().any(|w| {
                     w.kind() == CodexQuotaWindowKind::ShortTerm
-                        && w.reset_at()
-                            .is_some_and(|reset_at| reset_at > now_utc + chrono::Duration::minutes(30))
+                        && w.reset_at().is_some_and(|reset_at| {
+                            reset_at > now_utc + chrono::Duration::minutes(30)
+                        })
                 });
                 if has_active_5h {
                     summary.skipped_active += 1;
@@ -993,10 +995,7 @@ impl CodexCredentialQuotaService {
 
             let warmup_model = model.unwrap_or("gpt-5.4-mini");
             let mut body = Map::new();
-            body.insert(
-                "model".to_owned(),
-                Value::String(warmup_model.to_owned()),
-            );
+            body.insert("model".to_owned(), Value::String(warmup_model.to_owned()));
             body.insert(
                 "input".to_owned(),
                 serde_json::json!([{
@@ -1007,8 +1006,14 @@ impl CodexCredentialQuotaService {
             );
             body.insert("stream".to_owned(), Value::Bool(true));
             body.insert("store".to_owned(), Value::Bool(false));
-            body.insert("service_tier".to_owned(), Value::String("default".to_owned()));
-            body.insert("reasoning".to_owned(), serde_json::json!({"effort": "none"}));
+            body.insert(
+                "service_tier".to_owned(),
+                Value::String("default".to_owned()),
+            );
+            body.insert(
+                "reasoning".to_owned(),
+                serde_json::json!({"effort": "none"}),
+            );
             body.insert("text".to_owned(), serde_json::json!({"verbosity": "low"}));
 
             let upstream_request = CodexResponsesRequest::from_body(body);

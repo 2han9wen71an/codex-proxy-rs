@@ -199,7 +199,9 @@ impl RuntimeSettingsUpdate {
             || !valid_client_version(self.min_codex_desktop_version.as_deref())
             || !valid_client_version(self.min_codex_cli_version.as_deref())
             || !valid_probe_model(self.account_auto_freeze_probe_model.as_deref())
-            || !gateway_core::provider_ports::valid_warmup_schedule_time(&self.account_warmup_schedule_time)
+            || !gateway_core::provider_ports::valid_warmup_schedule_time(
+                &self.account_warmup_schedule_time,
+            )
             || !valid_probe_model(self.account_warmup_model.as_deref())
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
         {
