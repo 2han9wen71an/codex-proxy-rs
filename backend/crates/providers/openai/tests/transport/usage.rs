@@ -82,12 +82,27 @@ fn gpt_6_sol_and_luna_should_use_published_tier_and_context_prices() {
     for (model, tier, input, expected) in [
         ("gpt-6-sol", None, 272_000, ["2", "0.2", "2.5", "10"]),
         ("gpt-6-sol", None, 272_001, ["4", "0.4", "5", "15"]),
-        ("gpt-6-sol", Some("flex"), 272_000, ["1", "0.1", "1.25", "5"]),
+        (
+            "gpt-6-sol",
+            Some("flex"),
+            272_000,
+            ["1", "0.1", "1.25", "5"],
+        ),
         ("gpt-6-sol", Some("fast"), 272_001, ["8", "0.8", "10", "30"]),
         ("gpt-6-luna", None, 272_000, ["0.1", "0.01", "0.125", "0.5"]),
         ("gpt-6-luna", None, 272_001, ["0.2", "0.02", "0.25", "0.75"]),
-        ("gpt-6-luna", Some("flex"), 272_001, ["0.1", "0.01", "0.125", "0.375"]),
-        ("gpt-6-luna", Some("fast"), 272_000, ["0.2", "0.02", "0.25", "1"]),
+        (
+            "gpt-6-luna",
+            Some("flex"),
+            272_001,
+            ["0.1", "0.01", "0.125", "0.375"],
+        ),
+        (
+            "gpt-6-luna",
+            Some("fast"),
+            272_000,
+            ["0.2", "0.02", "0.25", "1"],
+        ),
     ] {
         let breakdown = openai_billing_breakdown(model, billing_usage(input, 1, 1, 1), tier)
             .expect("published GPT-6 pricing");

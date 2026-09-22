@@ -5,8 +5,7 @@ use serde_json::Value;
 
 const MODEL_DIAGNOSTIC_DIMENSION_SQL: &str =
     "coalesce(mr.upstream_model_id, mr.requested_model_id)";
-const KEY_MODEL_DIAGNOSTIC_DIMENSION_SQL: &str =
-    "json_build_array(mr.client_api_key_ref, coalesce(mr.upstream_model_id, mr.requested_model_id))::text";
+const KEY_MODEL_DIAGNOSTIC_DIMENSION_SQL: &str = "json_build_array(mr.client_api_key_ref, coalesce(mr.upstream_model_id, mr.requested_model_id))::text";
 
 pub(crate) fn push_usage_filter(
     query: &mut QueryBuilder<Postgres>,
@@ -452,13 +451,15 @@ pub(crate) async fn usage_diagnostics(
             order by request_count desc, dimension_name limit ",
     );
     // Key 用量页及管理端 Key×模型视图都需要保留区间内的全部组合。
-    statement.push_bind(if dimension == DiagnosticDimension::KeyModel
-        || (dimension == DiagnosticDimension::Model && filter.client_api_key_ref.is_some())
-    {
-        i64::MAX
-    } else {
-        DIAGNOSTIC_LIMIT
-    });
+    statement.push_bind(
+        if dimension == DiagnosticDimension::KeyModel
+            || (dimension == DiagnosticDimension::Model && filter.client_api_key_ref.is_some())
+        {
+            i64::MAX
+        } else {
+            DIAGNOSTIC_LIMIT
+        },
+    );
     statement.push(
         ")
          select aggregated.*

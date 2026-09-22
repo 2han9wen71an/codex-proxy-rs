@@ -85,29 +85,33 @@ pub(super) async fn fixture() -> AdminTestFixture {
         }]);
     }
     fixture.usage_records.lock().unwrap().push(usage_record());
-    fixture.diagnostics.lock().unwrap().push(DiagnosticObservation {
-        key: "coding".to_owned(),
-        name: "coding".to_owned(),
-        request_count: 2,
-        success_count: 1,
-        failure_count: 1,
-        attempt_count: 2,
-        total_tokens: 1100,
-        average_latency_ms: None,
-        latency_p95_ms: None,
-        first_token_p95_ms: None,
-        non_completion_count: 0,
-        retry_count: 0,
-        cost_coverage: CostCoverage {
-            calculated_count: 1,
-            unavailable_count: 1,
-            ..Default::default()
-        },
-        costs: vec![CurrencyCost {
-            currency: "USD".to_owned(),
-            amount: "0.123456".parse().unwrap(),
-        }],
-    });
+    fixture
+        .diagnostics
+        .lock()
+        .unwrap()
+        .push(DiagnosticObservation {
+            key: "coding".to_owned(),
+            name: "coding".to_owned(),
+            request_count: 2,
+            success_count: 1,
+            failure_count: 1,
+            attempt_count: 2,
+            total_tokens: 1100,
+            average_latency_ms: None,
+            latency_p95_ms: None,
+            first_token_p95_ms: None,
+            non_completion_count: 0,
+            retry_count: 0,
+            cost_coverage: CostCoverage {
+                calculated_count: 1,
+                unavailable_count: 1,
+                ..Default::default()
+            },
+            costs: vec![CurrencyCost {
+                currency: "USD".to_owned(),
+                amount: "0.123456".parse().unwrap(),
+            }],
+        });
     fixture.ops_errors.lock().unwrap().push(error_record());
     fixture
 }

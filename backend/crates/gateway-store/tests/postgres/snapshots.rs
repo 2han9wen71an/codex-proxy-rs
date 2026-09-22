@@ -968,9 +968,11 @@ async fn api_key_diagnostics_should_display_key_name_and_fallback_to_ref() {
         .await
         .expect("key/model diagnostics for both keys");
     assert_eq!(key_models.len(), 3);
-    assert!(key_models.iter().any(|item| {
-        item.name == "Other Key → upstream-model" && item.request_count == 1
-    }));
+    assert!(
+        key_models
+            .iter()
+            .any(|item| { item.name == "Other Key → upstream-model" && item.request_count == 1 })
+    );
 
     database.close().await;
 }
