@@ -1337,7 +1337,8 @@ Dashboard 的 `capacityInfo.maxConcurrentPerAccount` 为默认账号并发上限
 
 用量查询可组合页码/游标、时间范围、Provider、Client Key、账号、模型、route、transport、状态码、
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
-`apiKey`、`keyModel`、`provider`、`transport`、`failureClass`、`status`。`keyModel` 按 Client Key 与上游发送模型交叉汇总，
+`apiKey`、`keyModel`、`provider`、`transport`、`failureClass`、`status`。`keyModel` 按 Client Key 与模型交叉汇总，
+模型优先采用上游发送值，缺失时采用客户端请求值；
 返回请求数、Token 和估算费用；费用不完整时 `costIncomplete` 为 `true`。
 
 管理端请求列表及 Dashboard 最近请求中的 `accountNotes` 为账号当前备注，按内部账号 ID 关联。
