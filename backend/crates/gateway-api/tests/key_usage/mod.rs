@@ -176,6 +176,7 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
             "endTime",
             "key",
             "summary",
+            "models",
             "trend",
             "healthTimeline",
         ],
@@ -202,6 +203,16 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
     assert_eq!(data["trend"][0]["reasoningTokens"], 40);
     assert_eq!(data["summary"]["costUsd"], "0.123456");
     assert_eq!(data["summary"]["costIncomplete"], true);
+    assert_eq!(
+        data["models"],
+        json!([{
+            "model": "coding",
+            "requests": 2,
+            "totalTokens": 1100,
+            "costUsd": "0.123456",
+            "costIncomplete": true,
+        }])
+    );
     assert_eq!(data["trend"][0]["bucketSeconds"], 900);
     assert_eq!(
         data["healthTimeline"]["points"].as_array().unwrap().len(),
@@ -221,6 +232,18 @@ async fn overview_scopes_every_query_and_projects_only_key_visible_fields() {
         assert!(filter.provider_kind.is_none());
     }
     assert_eq!(observations.summaries[0].1.model.as_deref(), Some("coding"));
+    assert_eq!(observations.diagnostic_queries.len(), 1);
+    assert_eq!(
+        observations.diagnostic_queries[0]
+            .1
+            .client_api_key_ref
+            .as_deref(),
+        Some("key-42")
+    );
+    assert_eq!(
+        observations.diagnostic_queries[0].1.model.as_deref(),
+        Some("coding")
+    );
     let health = observations
         .trends
         .iter()

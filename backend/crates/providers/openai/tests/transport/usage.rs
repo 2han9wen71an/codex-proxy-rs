@@ -77,6 +77,39 @@ fn astra_billing_should_preserve_components_across_tiers_and_context_boundary() 
 }
 
 #[test]
+fn gpt_6_sol_and_luna_should_use_published_tier_and_context_prices() {
+    // 每百万 token 价格依次为输入、缓存读、缓存写、输出。
+    for (model, tier, input, expected) in [
+        ("gpt-6-sol", None, 272_000, ["2", "0.2", "2.5", "10"]),
+        ("gpt-6-sol", None, 272_001, ["4", "0.4", "5", "15"]),
+        ("gpt-6-sol", Some("flex"), 272_000, ["1", "0.1", "1.25", "5"]),
+        ("gpt-6-sol", Some("fast"), 272_001, ["8", "0.8", "10", "30"]),
+        ("gpt-6-luna", None, 272_000, ["0.1", "0.01", "0.125", "0.5"]),
+        ("gpt-6-luna", None, 272_001, ["0.2", "0.02", "0.25", "0.75"]),
+        ("gpt-6-luna", Some("flex"), 272_001, ["0.1", "0.01", "0.125", "0.375"]),
+        ("gpt-6-luna", Some("fast"), 272_000, ["0.2", "0.02", "0.25", "1"]),
+    ] {
+        let breakdown = openai_billing_breakdown(model, billing_usage(input, 1, 1, 1), tier)
+            .expect("published GPT-6 pricing");
+        let actual = [
+            breakdown.input_price_per_million(),
+            breakdown.cache_read_price_per_million(),
+            breakdown.cache_write_price_per_million(),
+            breakdown.output_price_per_million(),
+        ]
+        .map(|price| {
+            price
+                .amount()
+                .to_string()
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_owned()
+        });
+        assert_eq!(actual, expected, "{model} {tier:?} {input}");
+    }
+}
+
+#[test]
 fn billing_breakdown_should_preserve_input_output_and_cache_components() {
     let breakdown = openai_billing_breakdown("gpt-5.6-sol", billing_usage(100, 5, 20, 10), None)
         .expect("known model pricing");

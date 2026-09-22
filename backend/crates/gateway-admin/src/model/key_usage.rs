@@ -4,7 +4,8 @@ use super::{
     PageSize,
     client_keys::ClientKeyRecord,
     observability::{
-        HealthTimeline, OpsErrorPage, RequestMetricPoint, TimeRange, UsageOverview, UsagePage,
+        DiagnosticObservation, HealthTimeline, OpsErrorPage, RequestMetricPoint, TimeRange,
+        UsageOverview, UsagePage,
     },
 };
 
@@ -32,6 +33,7 @@ pub struct KeyUsageOverview {
     pub key: ClientKeyRecord,
     pub overview: UsageOverview,
     pub trend: Vec<RequestMetricPoint>,
+    pub models: Vec<DiagnosticObservation>,
     pub health_timeline: HealthTimeline,
 }
 

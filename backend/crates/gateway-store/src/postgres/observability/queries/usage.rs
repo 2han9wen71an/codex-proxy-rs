@@ -449,7 +449,14 @@ pub(crate) async fn usage_diagnostics(
             where currency_grouping = 1
             order by request_count desc, dimension_name limit ",
     );
-    statement.push_bind(DIAGNOSTIC_LIMIT);
+    // 单个 Key 的模型用量页需要列出该 Key 在区间内的全部模型。
+    statement.push_bind(if dimension == DiagnosticDimension::Model
+        && filter.client_api_key_ref.is_some()
+    {
+        i64::MAX
+    } else {
+        DIAGNOSTIC_LIMIT
+    });
     statement.push(
         ")
          select aggregated.*

@@ -10,6 +10,7 @@ import BaseScrollbar from '@/components/base/BaseScrollbar.vue'
 import RequestHealthTimelineCard from '@/views/dashboard/components/RequestHealthTimelineCard.vue'
 import KeyUsageBudget from './components/KeyUsageBudget.vue'
 import KeyUsageHeader from './components/KeyUsageHeader.vue'
+import KeyUsageModels from './components/KeyUsageModels.vue'
 import KeyUsageRecords from './components/KeyUsageRecords.vue'
 import KeyUsageSkeleton from './components/KeyUsageSkeleton.vue'
 import KeyUsageSummary from './components/KeyUsageSummary.vue'
@@ -63,6 +64,7 @@ async function openAbout() {
         </p>
         <template v-if="overview">
           <KeyUsageSummary :summary="overview.summary" />
+          <KeyUsageModels :models="overview.models" />
           <div class="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(400px,1fr)]">
             <KeyUsageTrend class="min-w-0" :points="overview.trend" />
             <KeyUsageBudget :budget="overview.key" />
