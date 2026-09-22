@@ -33,6 +33,7 @@ pub struct RuntimeSettings {
     pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub codex_session_affinity_enabled: bool,
+    pub round_robin_cross_weight_enabled: bool,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub model_mappings: BTreeMap<String, String>,
@@ -71,6 +72,10 @@ impl fmt::Debug for RuntimeSettings {
             .field(
                 "codex_session_affinity_enabled",
                 &self.codex_session_affinity_enabled,
+            )
+            .field(
+                "round_robin_cross_weight_enabled",
+                &self.round_robin_cross_weight_enabled,
             )
             .field("request_location_enabled", &self.request_location_enabled)
             .field("request_location", &self.request_location)
@@ -128,6 +133,7 @@ pub struct RuntimeSettingsUpdate {
     pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub codex_session_affinity_enabled: bool,
+    pub round_robin_cross_weight_enabled: bool,
     pub request_location_enabled: bool,
     pub request_location: gateway_core::account::RequestLocation,
     pub model_mappings: BTreeMap<String, String>,
@@ -241,7 +247,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
             "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled,
                     refresh_concurrency, max_concurrent_per_account, request_interval_ms,
-                    rotation_strategy, codex_session_affinity_enabled, model_mappings_json, usage_retention_days, ops_event_retention_days,
+                    rotation_strategy, codex_session_affinity_enabled, round_robin_cross_weight_enabled, model_mappings_json, usage_retention_days, ops_event_retention_days,
                     audit_retention_days, min_codex_desktop_version,
                     min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds,
                     account_auto_freeze_enabled, account_auto_freeze_threshold,
@@ -327,7 +333,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
     let row = sqlx::query_as::<_, RuntimeSettingsRow>(
         "select provider_request_profiles_json, config_revision, admin_api_key, refresh_margin_seconds, request_location_json, request_location_enabled,
                 refresh_concurrency, max_concurrent_per_account, request_interval_ms,
-                rotation_strategy, codex_session_affinity_enabled, model_mappings_json, usage_retention_days, ops_event_retention_days,
+                rotation_strategy, codex_session_affinity_enabled, round_robin_cross_weight_enabled, model_mappings_json, usage_retention_days, ops_event_retention_days,
                 audit_retention_days, min_codex_desktop_version,
                 min_codex_cli_version, updated_at, responses_max_decompressed_body_bytes, max_waiting_per_key, max_waiting_per_account, concurrency_wait_timeout_seconds,
                 account_auto_freeze_enabled, account_auto_freeze_threshold,
@@ -384,10 +390,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      provider_request_profiles_json = provider_request_profiles_json
                          || case when $26::jsonb is null then '{}'::jsonb else jsonb_build_object('openai', $26::jsonb) end
                          || case when $27::jsonb is null then '{}'::jsonb else jsonb_build_object('xai', $27::jsonb) end,
-                     account_warmup_enabled = $28,
-                     account_warmup_schedule_time = $29,
-                     account_warmup_model = $30,
-                     codex_session_affinity_enabled = $31,
+                     codex_session_affinity_enabled = $28,
+                     round_robin_cross_weight_enabled = $29,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -431,10 +435,8 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     )
     .bind(update.openai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
     .bind(update.xai_client_profile.as_ref().map(|profile| sqlx::types::Json(profile.expose_to_provider())))
-    .bind(update.account_warmup_enabled)
-    .bind(&update.account_warmup_schedule_time)
-    .bind(update.account_warmup_model.as_deref())
     .bind(update.codex_session_affinity_enabled)
+    .bind(update.round_robin_cross_weight_enabled)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -515,6 +517,7 @@ struct RuntimeSettingsRow {
     account_auto_freeze_probe_enabled: bool,
     account_auto_freeze_probe_model: Option<String>,
     account_auto_freeze_adaptive_concurrency: bool,
+    round_robin_cross_weight_enabled: bool,
 }
 
 fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
@@ -537,6 +540,7 @@ fn runtime_settings_from_row(mut row: RuntimeSettingsRow) -> StoreResult<Runtime
         request_interval_ms: to_u64(row.request_interval_ms)?,
         rotation_strategy: row.rotation_strategy,
         codex_session_affinity_enabled: row.codex_session_affinity_enabled,
+        round_robin_cross_weight_enabled: row.round_robin_cross_weight_enabled,
         request_location_enabled: row.request_location_enabled,
         request_location: row
             .request_location_json

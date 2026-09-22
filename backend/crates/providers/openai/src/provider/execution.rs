@@ -453,7 +453,13 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             }
         };
 
-        if allows_account_state_mutation && let Some(key) = request.session_affinity_key.as_ref() {
+        if allows_account_state_mutation
+            && request
+                .context
+                .account_selection_policy()
+                .codex_session_affinity_enabled()
+            && let Some(key) = request.session_affinity_key.as_ref()
+        {
             // JSON 已完整接收；在首个 yield 前提交亲和迁移，避免下游取消漏掉更新。
             request.selector.update_session_affinity(
                 key,
@@ -949,10 +955,11 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
                 // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定。
                 selector
-                    .record_success(
+                    .record_success_with_affinity(
                         &active_account,
                         session_affinity_key.as_ref(),
                         lease.affinity_expected_account_id(),
+                        context.account_selection_policy().codex_session_affinity_enabled(),
                     )
                     .await;
                 selector
@@ -1080,12 +1087,13 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         if allows_account_state_mutation && completed && terminal_failure.is_none() {
             // 同上：尾部 finish() 也可能产出 completed，亲和记录必须先于任何下游 yield。
             selector
-                .record_success(
+                .record_success_with_affinity(
                     &active_account,
                     session_affinity_key.as_ref(),
                     lease.affinity_expected_account_id(),
+                    context.account_selection_policy().codex_session_affinity_enabled(),
                 )
-                .await;
+                    .await;
             selector
                 .observe_cyber_policy_success(cyber_policy_scope.as_ref())
                 .await;

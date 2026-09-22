@@ -127,6 +127,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         concurrency_wait_timeout_seconds: 30,
         responses_max_decompressed_body_bytes: 64 * 1024 * 1024,
         rotation_strategy: RotationStrategy::RoundRobin,
+        round_robin_cross_weight_enabled: true,
         codex_session_affinity_enabled: true,
         min_codex_desktop_version: Some("26.825.6671".to_owned()),
         min_codex_cli_version: Some("0.40.0".to_owned()),
@@ -233,6 +234,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         rotation_strategy: RotationStrategy::parse(&request.rotation_strategy)
             .expect("fixture rotation strategy"),
         codex_session_affinity_enabled: request.codex_session_affinity_enabled,
+        round_robin_cross_weight_enabled: request.round_robin_cross_weight_enabled,
         min_codex_desktop_version: request.min_codex_desktop_version,
         min_codex_cli_version: request.min_codex_cli_version,
         usage_retention_days: u32::try_from(request.usage_retention_days).expect("u32"),

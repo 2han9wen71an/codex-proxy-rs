@@ -1076,11 +1076,30 @@ impl CodexCredentialSelector {
         session_affinity_key: Option<&ProviderSessionAffinityKey>,
         expected_affinity_account_id: &ProviderAccountId,
     ) {
+        self.record_success_with_affinity(
+            account,
+            session_affinity_key,
+            expected_affinity_account_id,
+            true,
+        )
+        .await;
+    }
+
+    pub async fn record_success_with_affinity(
+        &self,
+        account: &ProviderAccount,
+        session_affinity_key: Option<&ProviderSessionAffinityKey>,
+        expected_affinity_account_id: &ProviderAccountId,
+        affinity_enabled: bool,
+    ) {
         self.restore_recoverable_account_state(account).await;
         self.risk_recovery
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(account.id().as_str());
+        if !affinity_enabled {
+            return;
+        }
         let Some(key) = session_affinity_key else {
             return;
         };

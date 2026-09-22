@@ -49,6 +49,7 @@ pub struct RuntimeSettingsView {
     pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub codex_session_affinity_enabled: bool,
+    pub round_robin_cross_weight_enabled: bool,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u64,
@@ -85,6 +86,7 @@ pub struct UpdateRuntimeSettingsRequest {
     pub responses_max_decompressed_body_bytes: u64,
     pub rotation_strategy: String,
     pub codex_session_affinity_enabled: bool,
+    pub round_robin_cross_weight_enabled: bool,
     pub min_codex_desktop_version: Option<String>,
     pub min_codex_cli_version: Option<String>,
     pub usage_retention_days: u64,
@@ -208,6 +210,7 @@ impl UpdateRuntimeSettingsRequest {
             rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
             codex_session_affinity_enabled: self.codex_session_affinity_enabled,
+            round_robin_cross_weight_enabled: self.round_robin_cross_weight_enabled,
             min_codex_desktop_version: self.min_codex_desktop_version,
             min_codex_cli_version: self.min_codex_cli_version,
             usage_retention_days: u32::try_from(self.usage_retention_days)
@@ -250,6 +253,7 @@ impl From<RuntimeSettings> for RuntimeSettingsView {
             responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
             rotation_strategy: settings.rotation_strategy.as_str().to_owned(),
             codex_session_affinity_enabled: settings.codex_session_affinity_enabled,
+            round_robin_cross_weight_enabled: settings.round_robin_cross_weight_enabled,
             min_codex_desktop_version: settings.min_codex_desktop_version,
             min_codex_cli_version: settings.min_codex_cli_version,
             usage_retention_days: u64::from(settings.usage_retention_days),
