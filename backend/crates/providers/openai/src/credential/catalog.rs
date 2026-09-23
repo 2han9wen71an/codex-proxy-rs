@@ -534,6 +534,34 @@ impl CodexCredentialCatalogService {
         Ok(catalog)
     }
 
+    /// 读取该账号所属套餐的原生目录条目；供管理端按账号导出目录文件使用。
+    ///
+    /// 复用进程内快照，不单独向上游发起请求；快照缺失时按 `synchronize` 的常规路径补齐。
+    /// 返回顺序沿用上游目录顺序，条目内容保持上游原样，不做别名改写或字段裁剪。
+    pub async fn account_catalog_documents(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<(Vec<CodexCatalogModel>, SystemTime), CodexCredentialCatalogError> {
+        let snapshot = self.synchronize().await?;
+        let Some(entitlement) = snapshot.account_models(account)? else {
+            return Err(CodexCredentialCatalogError::NoEligibleCredential);
+        };
+        let entitlement = entitlement
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let models = snapshot
+            .models()
+            .iter()
+            .filter(|model| entitlement.contains(model.request_model().as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if models.is_empty() {
+            return Err(CodexCredentialCatalogError::NoEligibleCredential);
+        }
+        Ok((models, snapshot.observed_at()))
+    }
+
     /// 读取当前账号所属套餐的目录 cache，不触发上游请求。
     pub async fn read_account_catalog(
         &self,

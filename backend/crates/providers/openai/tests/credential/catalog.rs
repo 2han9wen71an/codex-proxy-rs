@@ -1365,3 +1365,46 @@ async fn slow_api_key_catalogs_share_a_deadline_and_preserve_healthy_catalogs() 
         Err(CodexCredentialCatalogError::Upstream { .. })
     ));
 }
+
+#[tokio::test]
+async fn account_catalog_documents_keep_native_objects_of_the_account_plan() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let plus = seed_account_with_plan(&store, "acct_catalog_plus", "plus").await;
+    let pro = seed_account_with_plan(&store, "acct_catalog_pro", "pro").await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(SequencedCatalogResponder {
+            calls: Arc::new(AtomicUsize::new(0)),
+            bodies: [
+                br#"{"models":[{"slug":"gpt-plus","display_name":"Plus","context_window":128000}]}"#,
+                br#"{"models":[{"slug":"gpt-pro","display_name":"Pro","context_window":272000}]}"#,
+            ],
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let service = service_with_catalog_cache(&store, server.uri(), catalog_cache());
+
+    let (models, _) = service
+        .account_catalog_documents(&pro)
+        .await
+        .expect("pro catalog");
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].request_model().as_str(), "gpt-pro");
+    // 导出的目录文件靠原生对象携带上下文窗口等元数据，正文必须原样保留。
+    assert_eq!(models[0].document().protocol(), "codex");
+    let document: serde_json::Value =
+        serde_json::from_slice(models[0].document().body()).expect("native document");
+    assert_eq!(document["context_window"], 272_000);
+
+    // 另一套餐的账号不能拿到别的套餐条目，否则客户端会列出自己用不了的模型。
+    let (plus_models, _) = service
+        .account_catalog_documents(&plus)
+        .await
+        .expect("plus catalog");
+    assert_eq!(plus_models.len(), 1);
+    assert_eq!(plus_models[0].request_model().as_str(), "gpt-plus");
+
+    server.verify().await;
+}

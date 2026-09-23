@@ -85,6 +85,7 @@ const {
   recoveringAccountIds,
   refreshingAccountIds,
   refreshingQuotaAccountIds,
+  downloadingCatalogAccountIds,
   deletingAccount,
   creatingAccount,
   authorizingOAuth,
@@ -100,6 +101,7 @@ const {
   handleDelete,
   handleBatchDelete,
   handleExportAccounts,
+  handleDownloadModelCatalog,
   handleRecover,
   handleRefresh,
   handleRefreshQuota,
@@ -321,11 +323,13 @@ const {
               <AccountTableActions
                 :account="row"
                 :deleting="deletingAccount"
+                :downloading-catalog="downloadingCatalogAccountIds.has(row.id)"
                 :recovering="recoveringAccountIds.has(row.id)"
                 :refreshing="refreshingAccountIds.has(row.id)"
                 :testing="testingConnectionIds.has(row.id)"
                 @edit="openAccountEdit"
                 @delete="requestDeleteAccount"
+                @download-model-catalog="handleDownloadModelCatalog"
                 @recover="handleRecover"
                 @refresh="handleRefresh"
                 @reauthorize="openReauthorizeAccount"

@@ -8,6 +8,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use futures::Stream;
 use gateway_core::{
     account::{OpaqueProviderData, ProviderAccountId, ProviderAccountIdentity},
+    operation::RawJsonPayload,
     routing::{ProviderKind, UpstreamModelId},
 };
 use serde::Deserialize;
@@ -1058,6 +1059,14 @@ pub struct ProviderModel {
 pub struct ProviderModels {
     pub models: Vec<ProviderModel>,
     pub observed_at: Option<DateTime<Utc>>,
+}
+
+/// Provider 原生模型目录正文；wire 语义由对应 Provider 拥有，公共层只搬运不解释字段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelCatalogDocument {
+    pub document: RawJsonPayload,
+    pub model_count: usize,
+    pub observed_at: DateTime<Utc>,
 }
 
 /// Provider 执行 refresh 时所需的当前公共账号事实。
