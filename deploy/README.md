@@ -441,7 +441,7 @@ docker compose -f deploy/compose.yaml pull codex-proxy-rs
 docker compose -f deploy/compose.yaml up -d --no-build --wait codex-proxy-rs
 ```
 
-源码构建需要克隆源码仓库并准备配置与数据目录。首次 UI 发布前，还需在宿主仓库同级准备 `codex-proxy-ui`，Compose 通过命名 build context 单独传入组件库，不复制回宿主源码树。以下命令从仓库根目录执行：
+源码构建需要克隆源码仓库并准备配置与数据目录。UI 组件库从锁定的 GitHub Release 包下载，无需准备同级源码仓库或额外 build context。以下命令从仓库根目录执行：
 
 ```bash
 docker compose -f deploy/compose.yaml build codex-proxy-rs

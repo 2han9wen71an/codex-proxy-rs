@@ -132,15 +132,13 @@ AI 进行前端开发时，加载并使用 `$frontend-design` 技能。设计方
 | 依赖安全 | Cargo Audit、pnpm Audit | 本次变更的权限、数据与信任边界 |
 | 工作流与容器 | Actionlint、相关容器检查 | 改动涉及的运行行为 |
 
-UI 与示例源码分别在同级 `codex-proxy-ui`、`codex-proxy-plugins` 仓库维护。前端的依赖、锁文件和 ESLint 配置均在 `frontend/` 管理，仓库根目录不维护 Node 包。首次公开发布前，`frontend/pnpm-workspace.yaml` 显式覆盖 UI 依赖到同级源码目录；须先在 UI 仓库安装依赖并构建，再安装前端依赖。开发服务通过 UI 包的 `development` 入口使用 Vue SFC，热更新由 Vite 处理，生产构建使用 `dist`。
+UI 与示例源码分别在独立的 `codex-proxy-ui`、`codex-proxy-plugins` 仓库维护。前端的依赖、锁文件和 ESLint 配置均在 `frontend/` 管理，仓库根目录不维护 Node 包。UI 依赖固定版本的 GitHub Release `.tgz`，锁文件记录下载地址及完整性摘要，常规开发和 CI 不需要检出同级仓库。开发服务通过 UI 包的 `development` 入口使用 Vue SFC，生产构建使用 `dist`。
 
 ```bash
-pnpm --dir ../codex-proxy-ui install --frozen-lockfile
-pnpm --dir ../codex-proxy-ui build
 pnpm --dir frontend install --frozen-lockfile
 ```
 
-首次发布时移除两个消费仓库中的本地 UI override，生成并提交 registry 锁文件；示例 SDK 改为包含当前接口的固定 Git 提交。当前本地覆盖不适用于只检出宿主的远程 CI，需完成上述发行依赖切换后才能验证独立远程构建，不使用浮动分支补齐缺失的依赖。
+需要修改组件库时，按 [UI 源码联调指南](https://github.com/zyycn/codex-proxy-ui/blob/main/playground/guide/development.md) 建立临时本地链接；提交前恢复发布依赖并核对锁文件，不能将开发机目录写入发行依赖。独立插件的 SDK 固定到包含所需合同的 Git 提交，不依赖浮动分支。
 
 前端从仓库根目录执行：
 
