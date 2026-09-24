@@ -1,8 +1,9 @@
 import type { Ref } from 'vue'
 import type { AccountImportTask, getAccounts } from '@/api'
 import type { RequestOptions } from '@/api/request'
+import { toast } from '@codex-proxy/ui'
 import dayjs from 'dayjs'
-import { ref, watch } from 'vue'
+import { computed, ref, shallowReactive, watch } from 'vue'
 import {
   deleteAccounts,
   exportAccounts,
@@ -11,7 +12,6 @@ import {
   refreshAccount,
   refreshAccountQuota,
 } from '@/api'
-import { toast } from '@/components/base/BaseToast'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { useDownload } from '@/composables/useDownload'
 import { useIdSet } from '@/composables/useIdSet'
@@ -34,7 +34,7 @@ export function useAccountMutations(options: {
     reload: loadAccounts,
     onImportTaskCreated: options.onImportTaskCreated,
   })
-  const selectedAccountsById = new Map<string, AccountRow>()
+  const selectedAccountsById = shallowReactive(new Map<string, AccountRow>())
   const showDeleteModal = ref(false)
   const showSingleDeleteModal = ref(false)
   const pendingDeleteAccount = ref<AccountRow | null>(null)
@@ -52,6 +52,22 @@ export function useAccountMutations(options: {
   const deletingAccount = deletingAccountAction.loading
   const batchDeleting = batchDeletingAction.loading
   const exportingAccounts = exportingAccountsAction.loading
+  const exportDisabledReason = computed(() => {
+    if (options.selectedIds.value.size === 0)
+      return ''
+    if (onboarding.accountProvidersLoading.value)
+      return '正在加载平台能力'
+    if (onboarding.accountProvidersError.value)
+      return '平台能力加载失败，请刷新后重试'
+    for (const id of options.selectedIds.value) {
+      const account = selectedAccountsById.get(id)
+      if (!account)
+        return '所选账号数据已失效，请重新选择'
+      if (!onboarding.accountProvidersById.value.get(account.provider)?.credentials.export)
+        return '所选账号包含不支持导出的平台'
+    }
+    return ''
+  })
 
   watch(
     [options.accounts, options.selectedIds],
@@ -135,6 +151,10 @@ export function useAccountMutations(options: {
       toast.warning('请选择要导出的账号')
       return
     }
+    if (exportDisabledReason.value) {
+      toast.warning(exportDisabledReason.value)
+      return
+    }
 
     await exportingAccountsAction.run(
       async () => {
@@ -154,9 +174,9 @@ export function useAccountMutations(options: {
     await downloadingCatalogAccounts.run(account.id, async () => {
       try {
         const result = await getAccountModelCatalog({ accountId: account.id })
-        // 文件名带账号名便于区分多账号目录；账号名可能含空格等字符，统一收敛为安全片段。
-        const slug = account.name.replace(/[^\w-]/g, '_') || account.id
-        await downloadJson(result.catalog, `cpr-model-catalog-${slug}.json`)
+        // 保留账号名中的文字和数字，并附上账号 ID，避免同名账号或非英文名称产生重名文件。
+        const slug = account.name.replace(/[^\p{L}\p{N}_-]/gu, '_') || 'account'
+        await downloadJson(result.catalog, `cpr-model-catalog-${slug}-${encodeURIComponent(account.id)}.json`)
         toast.success(`已导出 ${result.modelCount} 个模型，配置 model_catalog_json 后重启客户端生效`)
       }
       catch {}
@@ -203,6 +223,8 @@ export function useAccountMutations(options: {
   }
 
   async function handleQuotaReset(accountId: string) {
+    if (!options.accounts.value.find(account => account.id === accountId)?.capabilities.quotaRefresh)
+      return
     try {
       const result = await refreshAccountQuota({ accountId }, { silent: true })
       await options.replaceAccount(result.account)
@@ -280,6 +302,7 @@ export function useAccountMutations(options: {
     deletingAccount,
     batchDeleting,
     exportingAccounts,
+    exportDisabledReason,
     requestDeleteAccount,
     handleDelete,
     handleBatchDelete,

@@ -534,32 +534,25 @@ impl CodexCredentialCatalogService {
         Ok(catalog)
     }
 
-    /// 读取该账号所属套餐的原生目录条目；供管理端按账号导出目录文件使用。
+    /// 读取目标账号的原生目录条目；供管理端按账号导出目录文件使用。
     ///
-    /// 复用进程内快照，不单独向上游发起请求；快照缺失时按 `synchronize` 的常规路径补齐。
+    /// 按账号直接请求上游，避免进程快照的跨套餐同名模型合并替换目标账号的原生对象；
+    /// 停用账号也不在常规快照候选中，仍允许管理员显式导出。
     /// 返回顺序沿用上游目录顺序，条目内容保持上游原样，不做别名改写或字段裁剪。
     pub async fn account_catalog_documents(
         &self,
         account: &ProviderAccount,
     ) -> Result<(Vec<CodexCatalogModel>, SystemTime), CodexCredentialCatalogError> {
-        let snapshot = self.synchronize().await?;
-        let Some(entitlement) = snapshot.account_models(account)? else {
-            return Err(CodexCredentialCatalogError::NoEligibleCredential);
-        };
-        let entitlement = entitlement
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        let models = snapshot
-            .models()
-            .iter()
-            .filter(|model| entitlement.contains(model.request_model().as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        if models.is_empty() {
+        let client = CodexBackendClient::new(
+            self.http.clone(),
+            self.base_url.clone(),
+            self.profile.clone(),
+        );
+        let fetched = self.fetch_account_models(&client, account, None).await?;
+        if fetched.models.is_empty() {
             return Err(CodexCredentialCatalogError::NoEligibleCredential);
         }
-        Ok((models, snapshot.observed_at()))
+        Ok((fetched.models, SystemTime::now()))
     }
 
     /// 读取当前账号所属套餐的目录 cache，不触发上游请求。
