@@ -1281,7 +1281,7 @@ async fn api_key_catalog_does_not_replace_native_metadata_for_shared_models() {
     };
     assert_eq!(payload, before.models()[0].document());
     let api_only = service
-        .client_model_catalog(&client_scope(&[api_account.clone()]), "1.0.0")
+        .client_model_catalog(&client_scope(std::slice::from_ref(&api_account)), "1.0.0")
         .await
         .expect("API client catalog");
     assert!(matches!(
