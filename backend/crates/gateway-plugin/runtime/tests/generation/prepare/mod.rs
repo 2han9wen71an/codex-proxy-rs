@@ -587,14 +587,32 @@ async fn restart_circuit_does_not_let_an_older_generation_clear_newer_failures()
     snapshot.config_revision = Revision::new(5).unwrap();
     snapshot.instances[1].revision = Revision::new(5).unwrap();
     snapshot.instances[1].configuration = serde_json::json!({"revision":5});
-    assert!(
-        PluginPreparation::prepare(&runtime, Revision::new(1).unwrap(), snapshot)
+    let isolated =
+        PluginPreparation::prepare(&runtime, Revision::new(1).unwrap(), snapshot.clone())
             .await
-            .is_err(),
+            .expect("historical failure is isolated from the candidate");
+    let diagnostics = PluginPreparation::runtime_diagnostics(
+        &runtime,
+        &snapshot,
+        Some(snapshot.config_revision.get()),
+        Some(&isolated),
+    )
+    .await
+    .expect("runtime diagnostics");
+    assert_eq!(
+        diagnostics["instance-one"].status,
+        PluginInstanceRuntimeStatus::PreparationFailed
+    );
+    let failure = diagnostics["instance-one"].failure.as_ref().unwrap();
+    assert_eq!(failure.code, "unavailable");
+    assert!(
+        failure.message.contains("已暂停自动重启"),
         "the older healthy session must not erase newer failures for the same identity"
     );
+    assert!(isolated.is_ready());
     assert_eq!(startup_count(&marker), 4);
 
+    drop(isolated);
     drop(published);
     super::wait_until_empty(cache.path()).await;
 }
@@ -663,13 +681,29 @@ async fn restart_circuit_restores_an_older_failure_after_candidate_shutdown() {
     snapshot.config_revision = Revision::new(3).unwrap();
     snapshot.instances[1].revision = Revision::new(3).unwrap();
     snapshot.instances[1].configuration = serde_json::json!({"revision":3});
-    assert!(
-        PluginPreparation::prepare(&runtime, Revision::new(1).unwrap(), snapshot)
+    let isolated =
+        PluginPreparation::prepare(&runtime, Revision::new(1).unwrap(), snapshot.clone())
             .await
-            .is_err()
+            .expect("historical failure is isolated from the candidate");
+    let diagnostics = PluginPreparation::runtime_diagnostics(
+        &runtime,
+        &snapshot,
+        Some(snapshot.config_revision.get()),
+        Some(&isolated),
+    )
+    .await
+    .expect("runtime diagnostics");
+    assert_eq!(
+        diagnostics["instance-one"].status,
+        PluginInstanceRuntimeStatus::PreparationFailed
     );
+    let failure = diagnostics["instance-one"].failure.as_ref().unwrap();
+    assert_eq!(failure.code, "unavailable");
+    assert!(failure.message.contains("已暂停自动重启"));
+    assert!(isolated.is_ready());
     assert_eq!(startup_count(&marker), 2);
 
+    drop(isolated);
     drop(published);
     super::wait_until_empty(cache.path()).await;
 }

@@ -8,7 +8,7 @@ use gateway_admin::{
             PluginPermissionGrant,
         },
     },
-    ports::plugins::PluginPackageInspector,
+    ports::plugins::{PluginPackageInspector, PluginPreparation},
 };
 use gateway_core::{
     account::ProviderAccountId,
@@ -70,7 +70,7 @@ fn grant(permission: Permission) -> PluginPermissionGrant {
 async fn setup(
     instances: Vec<(&str, serde_json::Value, Vec<PluginCapabilityBinding>)>,
     rpc_limits: RpcLimits,
-) -> (tempfile::TempDir, PluginRuntime) {
+) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
     setup_with_permissions(
         instances
             .into_iter()
@@ -91,7 +91,7 @@ async fn setup_with_permissions(
     instances: Vec<InstanceFixture>,
     manifest_permissions: Vec<Permission>,
     rpc_limits: RpcLimits,
-) -> (tempfile::TempDir, PluginRuntime) {
+) -> (tempfile::TempDir, Arc<Store>, PluginRuntime) {
     let cache = tempfile::tempdir().unwrap();
     let contributes = Contributions::from([
         crate::support::contribution(
@@ -144,7 +144,7 @@ async fn setup_with_permissions(
     });
     let runtime = PluginRuntime::new(
         store.clone(),
-        store,
+        store.clone(),
         PluginRuntimeConfig {
             cache_directory: cache.path().to_owned(),
             host_version: "1.0.0".parse().unwrap(),
@@ -160,7 +160,7 @@ async fn setup_with_permissions(
             std::num::NonZeroUsize::new(16).unwrap(),
         )),
     );
-    (cache, runtime)
+    (cache, store, runtime)
 }
 
 fn observation(id: &str, outcome: RequestObservationOutcome) -> RequestObservation {
@@ -234,7 +234,7 @@ async fn wait_for_lines(path: &std::path::Path, count: usize) -> Vec<serde_json:
 async fn frozen_plan_applies_scope_order_and_instance_deduplication() {
     let marker_directory = tempfile::tempdir().unwrap();
     let marker = marker_directory.path().join("observations.jsonl");
-    let (cache, runtime) = setup(
+    let (cache, _store, runtime) = setup(
         vec![
             (
                 "late",
@@ -300,7 +300,7 @@ async fn websocket_observer_preserves_order_generation_and_permission_boundaries
     let marker_directory = tempfile::tempdir().unwrap();
     let hidden = marker_directory.path().join("hidden.jsonl");
     let readable = marker_directory.path().join("readable.jsonl");
-    let (cache, runtime) = setup_with_permissions(
+    let (cache, _store, runtime) = setup_with_permissions(
         vec![
             InstanceFixture {
                 id: "hidden".into(),
@@ -410,7 +410,7 @@ async fn websocket_observer_bounds_event_count_and_payload_bytes_without_blockin
         maximum_calls: 1,
         ..RpcLimits::default()
     };
-    let (count_cache, count_runtime) = setup_with_permissions(
+    let (count_cache, _store, count_runtime) = setup_with_permissions(
         vec![InstanceFixture {
             id: "count".into(),
             configuration: serde_json::json!({
@@ -471,7 +471,7 @@ async fn websocket_observer_bounds_event_count_and_payload_bytes_without_blockin
     let byte_started = marker_directory.path().join("byte-started.jsonl");
     let fault_completed = marker_directory.path().join("fault-completed.jsonl");
     let healthy_completed = marker_directory.path().join("healthy-completed.jsonl");
-    let (byte_cache, byte_runtime) = setup_with_permissions(
+    let (byte_cache, _store, byte_runtime) = setup_with_permissions(
         vec![
             InstanceFixture {
                 id: "fault".into(),
@@ -542,7 +542,7 @@ async fn observer_failure_continues_the_plan_and_timeout_is_bounded() {
     let marker_directory = tempfile::tempdir().unwrap();
     let started = marker_directory.path().join("started.jsonl");
     let completed = marker_directory.path().join("completed.jsonl");
-    let (cache, runtime) = setup(
+    let (cache, _store, runtime) = setup(
         vec![
             (
                 "fault",
@@ -617,18 +617,16 @@ async fn invalid_observer_stage_policy_and_mixed_order_are_rejected_before_publi
             binding(WEB_SOCKET_OBSERVER_CONTRIBUTION, 2),
         ],
     ] {
-        let (_cache, runtime) = setup(
+        let (_cache, store, runtime) = setup(
             vec![("invalid", serde_json::json!({}), bindings)],
             RpcLimits::default(),
         )
         .await;
+        let snapshot = store.snapshot.lock().unwrap().clone();
         assert!(
-            gateway_core::runtime::extensions::ExtensionPreparationPort::prepare(
-                &runtime,
-                ConfigRevision::new(1).unwrap(),
-            )
-            .await
-            .is_err()
+            PluginPreparation::prepare(&runtime, snapshot.config_revision, snapshot)
+                .await
+                .is_err()
         );
     }
 }
@@ -643,7 +641,7 @@ async fn client_scope_filters_observations_and_exposes_only_the_key_identifier()
     scoped.client_key_ids = vec!["client-key-observed".into()];
     scoped.account_group_ids = vec![matching_group.into()];
     scoped.provider_ids.clear();
-    let (cache, runtime) = setup(
+    let (cache, _store, runtime) = setup(
         vec![(
             "scoped",
             serde_json::json!({"observation_label":"scoped","observation_marker":marker}),
@@ -719,7 +717,7 @@ async fn client_scope_filters_observations_and_exposes_only_the_key_identifier()
 async fn usage_observation_contains_final_cost_timings_and_safe_failure_only() {
     let marker_directory = tempfile::tempdir().unwrap();
     let marker = marker_directory.path().join("usage-observations.jsonl");
-    let (cache, runtime) = setup(
+    let (cache, _store, runtime) = setup(
         vec![(
             "usage",
             serde_json::json!({"observation_label":"usage","observation_marker":marker}),
@@ -798,18 +796,16 @@ async fn invalid_client_key_and_group_scopes_are_rejected_before_publish() {
         vec![invalid_group],
         vec![duplicate_groups],
     ] {
-        let (_cache, runtime) = setup(
+        let (_cache, store, runtime) = setup(
             vec![("invalid-scope", serde_json::json!({}), bindings)],
             RpcLimits::default(),
         )
         .await;
+        let snapshot = store.snapshot.lock().unwrap().clone();
         assert!(
-            gateway_core::runtime::extensions::ExtensionPreparationPort::prepare(
-                &runtime,
-                ConfigRevision::new(1).unwrap(),
-            )
-            .await
-            .is_err()
+            PluginPreparation::prepare(&runtime, snapshot.config_revision, snapshot)
+                .await
+                .is_err()
         );
     }
 }
@@ -823,7 +819,7 @@ async fn observer_backpressure_drops_excess_and_inflight_dispatch_keeps_generati
         maximum_calls: 1,
         ..RpcLimits::default()
     };
-    let (cache, runtime) = setup(
+    let (cache, _store, runtime) = setup(
         vec![(
             "slow",
             serde_json::json!({
