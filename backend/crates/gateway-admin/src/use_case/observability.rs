@@ -383,6 +383,8 @@ impl ObservabilityService for DefaultObservabilityService {
                     retry_rate,
                     impact_score,
                     estimated_cost: usd_cost(&item.costs),
+                    cost_incomplete: item.cost_coverage.partial_count > 0
+                        || item.cost_coverage.unavailable_count > 0,
                     attempt_count: item.attempt_count,
                     total_tokens: item.total_tokens,
                 }

@@ -54,6 +54,7 @@ pub(super) struct OverviewView {
     end_time: DateTime<Utc>,
     key: KeyView,
     summary: MetricsView,
+    models: Vec<ModelUsageView>,
     trend: Vec<TrendPointView>,
     health_timeline: HealthTimelineView,
 }
@@ -82,6 +83,16 @@ struct MetricsView {
     cached_tokens: u64,
     cache_write_tokens: u64,
     reasoning_tokens: u64,
+    total_tokens: u64,
+    cost_usd: Option<String>,
+    cost_incomplete: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelUsageView {
+    model: String,
+    requests: u64,
     total_tokens: u64,
     cost_usd: Option<String>,
     cost_incomplete: bool,
@@ -137,6 +148,22 @@ pub(super) fn overview(value: KeyUsageOverview) -> OverviewView {
             &value.overview.attempts.costs,
             &value.overview.attempts.cost_coverage,
         ),
+        models: value
+            .models
+            .into_iter()
+            .map(|model| ModelUsageView {
+                model: model.name,
+                requests: model.request_count,
+                total_tokens: model.total_tokens,
+                cost_usd: model
+                    .costs
+                    .iter()
+                    .find(|cost| cost.currency.eq_ignore_ascii_case("USD"))
+                    .map(|cost| cost.amount.to_string()),
+                cost_incomplete: model.cost_coverage.partial_count > 0
+                    || model.cost_coverage.unavailable_count > 0,
+            })
+            .collect(),
         trend: value
             .trend
             .into_iter()

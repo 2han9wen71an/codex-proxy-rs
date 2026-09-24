@@ -1296,6 +1296,7 @@ pub(crate) fn diagnostics_view(
                 retry_rate: item.retry_rate,
                 impact_score: item.impact_score,
                 estimated_cost: item.estimated_cost.as_ref().map(ToString::to_string),
+                cost_incomplete: item.cost_incomplete,
                 attempt_count: item.attempt_count,
                 total_tokens: item.total_tokens,
             })

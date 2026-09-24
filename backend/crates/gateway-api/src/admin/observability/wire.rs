@@ -760,6 +760,7 @@ pub struct DiagnosticItemView {
     pub retry_rate: f64,
     pub impact_score: f64,
     pub estimated_cost: Option<String>,
+    pub cost_incomplete: bool,
     pub attempt_count: u64,
     pub total_tokens: u64,
 }

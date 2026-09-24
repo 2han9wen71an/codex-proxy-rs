@@ -422,7 +422,7 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
 
 | 方法 | 路由 | 查询 | 说明 |
 | --- | --- | --- | --- |
-| `GET` | `/api/key-usage/overview` | `startTime`、`endTime`、`model?` | 用量汇总、趋势、当前额度和北京时间今日健康时间线 |
+| `GET` | `/api/key-usage/overview` | `startTime`、`endTime`、`model?` | 用量汇总、逐模型 Token 与估算费用、趋势、当前额度和北京时间今日健康时间线 |
 | `GET` | `/api/key-usage/records` | 同上，另含 `kind?`、`currentPage?`、`pageSize?` | 当前 Key 的成功请求或错误记录 |
 | `GET` | `/api/key-usage/config` | 无 | 当前 Key 的客户端配置凭据 |
 | `GET` | `/api/key-usage/version` | 无 | “关于”弹窗使用的当前版本号和提交号 |
@@ -1487,7 +1487,9 @@ Dashboard 的 `capacityInfo.maxConcurrentPerAccount` 为默认账号并发上限
 
 用量查询可组合页码/游标、时间范围、Provider、Client Key、账号、模型、route、transport、状态码、
 request/response/upstream ID、outcome 与搜索文本。诊断 `dimension` 可取 `model`、`account`、
-`apiKey`、`provider`、`transport`、`failureClass`、`status`。
+`apiKey`、`keyModel`、`provider`、`transport`、`failureClass`、`status`。`keyModel` 按 Client Key 与模型交叉汇总，
+模型优先采用上游发送值，缺失时采用客户端请求值；
+返回请求数、Token 和估算费用；费用不完整时 `costIncomplete` 为 `true`。
 
 `/api/admin/usage/providers` 仅接受可选的 `startTime`、`endTime`，返回 `data: string[]`，没有记录时为空数组。
 时间使用 RFC 3339 格式，包含起点、不包含终点；默认终点为当前时间、起点为终点前 7 天，范围须为正且不超过 366 天。

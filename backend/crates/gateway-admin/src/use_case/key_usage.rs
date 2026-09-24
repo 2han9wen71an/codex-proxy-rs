@@ -16,7 +16,8 @@ use crate::{
             KeyUsageRecordsQuery,
         },
         observability::{
-            OpsErrorFilter, OpsErrorQuery, TimeRange, UsageFilter, UsageQuery, china_day_start,
+            DiagnosticDimension, OpsErrorFilter, OpsErrorQuery, TimeRange, UsageFilter, UsageQuery,
+            china_day_start,
         },
         system::SystemVersion,
     },
@@ -187,9 +188,11 @@ impl KeyUsageService for DefaultKeyUsageService {
             start: china_day_start(now),
             end: now,
         };
-        let (overview, trend, health_points) = futures::try_join!(
+        let (overview, trend, models, health_points) = futures::try_join!(
             self.observations.usage_summary(query.range, filter.clone()),
-            self.observations.usage_trend(query.range, filter),
+            self.observations.usage_trend(query.range, filter.clone()),
+            self.observations
+                .usage_diagnostics(query.range, filter, DiagnosticDimension::Model),
             self.observations
                 .usage_trend(today, usage_filter(&id, None)),
         )
@@ -198,6 +201,7 @@ impl KeyUsageService for DefaultKeyUsageService {
             key,
             overview,
             trend,
+            models,
             health_timeline: health_timeline_at(&health_points, now),
         }))
     }

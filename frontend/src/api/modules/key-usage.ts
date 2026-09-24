@@ -49,8 +49,17 @@ export interface KeyUsageOverview {
   endTime: string
   key: KeyUsageBudget
   summary: KeyUsageMetrics
+  models: KeyUsageModel[]
   trend: KeyUsageTrendPoint[]
   healthTimeline: DashboardHealthTimeline
+}
+
+export interface KeyUsageModel {
+  model: string
+  requests: number
+  totalTokens: number
+  costUsd: string | null
+  costIncomplete: boolean
 }
 
 export type KeyUsageRecordKind = 'success' | 'error'

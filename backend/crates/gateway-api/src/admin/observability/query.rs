@@ -168,6 +168,7 @@ impl TrendKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticDimension {
     Model,
+    KeyModel,
     Account,
     ApiKey,
     Provider,
@@ -181,6 +182,7 @@ impl DiagnosticDimension {
     pub fn parse(value: Option<&str>) -> Result<Self, WireValidationError> {
         match trimmed(value) {
             None | Some("model") => Ok(Self::Model),
+            Some("keyModel") => Ok(Self::KeyModel),
             Some("account") => Ok(Self::Account),
             Some("apiKey" | "api_key") => Ok(Self::ApiKey),
             Some("provider") => Ok(Self::Provider),
@@ -196,6 +198,7 @@ impl DiagnosticDimension {
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Model => "model",
+            Self::KeyModel => "keyModel",
             Self::Account => "account",
             Self::ApiKey => "apiKey",
             Self::Provider => "provider",
@@ -265,6 +268,7 @@ pub(crate) fn domain_diagnostic_dimension(
 ) -> domain::DiagnosticDimension {
     match dimension {
         DiagnosticDimension::Model => domain::DiagnosticDimension::Model,
+        DiagnosticDimension::KeyModel => domain::DiagnosticDimension::KeyModel,
         DiagnosticDimension::Account => domain::DiagnosticDimension::Account,
         DiagnosticDimension::ApiKey => domain::DiagnosticDimension::ApiKey,
         DiagnosticDimension::Provider => domain::DiagnosticDimension::Provider,
