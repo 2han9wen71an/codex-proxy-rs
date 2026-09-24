@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import type { OutboundProxyRecord, RequestLocation } from '@/api'
+import type { OutboundProxyRecord, OutboundProxyTest, RequestLocation } from '@/api'
 import { BaseButton, BaseForm, BaseFormItem, BaseIconButton, BaseInput, BaseModal, BaseSwitch } from '@codex-proxy/ui'
 import { Eye, EyeOff, Save, Wifi } from '@lucide/vue'
 import { computed, shallowRef, watch } from 'vue'
 import RequestLocationFields from '@/components/RequestLocationFields.vue'
+import { formatDateTime } from '@/utils/date'
+import { locationDetectionWarning } from '../utils/location'
 
 const props = defineProps<{
   proxy: OutboundProxyRecord | null
   saving: boolean
   testing: boolean
+  testResult: OutboundProxyTest | null
 }>()
 const emit = defineEmits<{
   save: []
@@ -17,8 +20,16 @@ const emit = defineEmits<{
 const open = defineModel<boolean>({ required: true })
 const name = defineModel<string>('name', { required: true })
 const proxyUrl = defineModel<string>('proxyUrl', { required: true })
+const autoLocation = defineModel<boolean>('autoLocation', { required: true })
 const customLocation = defineModel<boolean>('customLocation', { required: true })
 const location = defineModel<RequestLocation>('location', { required: true })
+const testedConnection = computed(() => props.testResult ?? (proxyUrl.value.trim() ? null : props.proxy?.lastTest))
+const detection = computed(() => testedConnection.value?.location)
+const detectedLocation = computed(() => detection.value?.status === 'detected'
+  ? detection.value.location
+  : (!proxyUrl.value.trim() ? props.proxy?.detectedLocation?.location : null))
+const detectionWarning = computed(() => locationDetectionWarning(testedConnection.value))
+const connectionFailure = computed(() => testedConnection.value?.success === false ? testedConnection.value.message : '')
 const showSecret = shallowRef(false)
 const busy = computed(() => props.saving || props.testing)
 const title = computed(() => props.proxy ? '编辑代理' : '新增代理')
@@ -54,8 +65,33 @@ watch(open, () => {
           </template>
         </BaseInput>
       </BaseFormItem>
-      <BaseSwitch v-model="customLocation" label="自定义时区位置" show-label :disabled="busy" />
-      <RequestLocationFields v-if="customLocation" v-model="location" :disabled="busy" />
+      <div class="grid gap-2">
+        <BaseSwitch v-model="autoLocation" label="自动跟随出口 IP 时区" show-label :disabled="busy" />
+        <template v-if="autoLocation">
+          <p class="m-0 text-cp-xs text-cp-text-secondary">
+            首次开启或更换地址时识别，保存后仅在测试连接时刷新
+          </p>
+          <p v-if="detectedLocation" class="m-0 break-words text-cp-sm text-cp-text">
+            {{ detectedLocation.country }} / {{ detectedLocation.region }} / {{ detectedLocation.city }} · {{ detectedLocation.timezone }}
+          </p>
+          <p v-if="connectionFailure" class="m-0 text-cp-sm text-cp-error-text" role="alert">
+            连接测试失败：{{ connectionFailure }}
+          </p>
+          <p v-if="detectionWarning && !connectionFailure" class="m-0 text-cp-sm text-cp-warning-text" role="status">
+            {{ detectionWarning }}{{ detectedLocation ? '，沿用上次位置' : detection?.status === 'conflict' ? '' : '，未使用自动位置覆盖' }}
+          </p>
+          <p v-else-if="!detectedLocation && !connectionFailure" class="m-0 text-cp-sm text-cp-text-secondary">
+            保存时自动识别出口位置
+          </p>
+          <p v-if="proxy?.detectedLocation && !proxyUrl.trim() && !testResult" class="m-0 text-cp-xs text-cp-text-tertiary">
+            最近识别 {{ formatDateTime(proxy.detectedLocation.detectedAt) }}
+          </p>
+        </template>
+      </div>
+      <template v-if="!autoLocation">
+        <BaseSwitch v-model="customLocation" label="自定义时区位置" show-label :disabled="busy" />
+        <RequestLocationFields v-if="customLocation" v-model="location" :disabled="busy" />
+      </template>
       <p v-if="proxy?.accountCount && proxyUrl.trim()" class="m-0 text-cp-sm text-cp-warning-text">
         将更新 {{ proxy.accountCount }} 个关联账号的出口
       </p>
