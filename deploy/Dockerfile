@@ -8,7 +8,8 @@ FROM node:26-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406
 
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
-RUN npm install --global pnpm@11.7.0 && pnpm install --frozen-lockfile
+RUN npm install --global "$(node -p 'require("./package.json").packageManager')" \
+    && pnpm install --frozen-lockfile
 COPY frontend ./
 RUN pnpm build
 
