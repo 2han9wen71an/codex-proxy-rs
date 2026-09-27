@@ -206,7 +206,7 @@ pub enum CodexCredentialQuotaError {
         detail: String,
         /// 上游 HTTP 状态码；传输失败等无响应场景为 `None`。
         status: Option<u16>,
-        /// 上游错误体里的稳定错误码（如 `token_revoked`）；仅在可安全透出时存在。
+        /// 有界错误码，供内部诊断和已知码映射使用，不直接拼入公开提示。
         code: Option<String>,
     },
 }
@@ -267,7 +267,7 @@ impl From<gateway_core::error::StoreError> for CodexCredentialQuotaError {
     }
 }
 
-/// 上游错误的状态码；仅有真实 HTTP 响应时存在，传输失败等为 `None`。
+/// 客户端错误携带的 HTTP 状态码；传输失败等为 `None`。
 fn upstream_error_status(error: &CodexClientError) -> Option<u16> {
     match error {
         CodexClientError::Upstream { status, .. } => Some(status.as_u16()),
@@ -277,7 +277,7 @@ fn upstream_error_status(error: &CodexClientError) -> Option<u16> {
 
 /// 从上游错误体提取稳定错误码：优先 `/error/code`，其次 `/code`。
 ///
-/// 只接受短的、单行、无控制字符的标识，避免把上游正文整段透出到管理端文案。
+/// 只接受有界的 ASCII 标识，避免把自由文本作为错误码写入诊断。
 fn upstream_error_code(error: &CodexClientError) -> Option<String> {
     let CodexClientError::Upstream { body, .. } = error else {
         return None;
@@ -288,7 +288,12 @@ fn upstream_error_code(error: &CodexClientError) -> Option<String> {
         .or_else(|| value.pointer("/code"))
         .and_then(Value::as_str)?
         .trim();
-    if code.is_empty() || code.len() > 64 || code.chars().any(char::is_control) {
+    if code.is_empty()
+        || code.len() > 64
+        || !code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
         return None;
     }
     Some(code.to_owned())
@@ -1002,11 +1007,10 @@ impl CodexCredentialQuotaService {
                             tracing::warn!(
                                 account_id = %account.id(),
                                 error = %error,
+                                upstream_status = upstream_error_status(&error),
+                                upstream_code = ?upstream_error_code(&error),
                                 "OpenAI quota upstream rejection; refresh cycle will retry later"
                             );
-                            // 不改变账号事实，只把失败原因落到账号行，避免运营在面板上只能看到"刷新失败"。
-                            self.persist_quota_fetch_failure(&account, &error, observed_at)
-                                .await;
                         }
                     }
                 }
@@ -1531,11 +1535,7 @@ impl CodexCredentialQuotaService {
                         self.persist_credential_failure(&account, state, reason, observed_at)
                             .await;
                     }
-                    None => {
-                        // 不改变账号事实，只把失败原因落到账号行，避免运营在面板上只能看到"刷新失败"。
-                        self.persist_quota_fetch_failure(&account, &error, observed_at)
-                            .await;
-                    }
+                    None => {}
                 }
                 return Err(CodexCredentialQuotaError::Upstream {
                     detail: error.to_string(),
@@ -1635,43 +1635,6 @@ impl CodexCredentialQuotaService {
                 reason = reason.as_str(),
                 error = %error,
                 "OpenAI quota credential fact write failed"
-            );
-        }
-    }
-
-    /// 记录一次额度抓取失败的观测信息。
-    ///
-    /// 只写 `last_error_message`（状态保持账号当前值），不改任何账号事实——
-    /// 耗尽账号不会被调度，真实推理请求永远不会来"确认" 401，若不落盘，
-    /// 运营在面板上只能看到"刷新失败"而无法区分是凭据被吊销还是出口故障。
-    async fn persist_quota_fetch_failure(
-        &self,
-        account: &ProviderAccount,
-        error: &CodexClientError,
-        observed_at: SystemTime,
-    ) {
-        let detail = match (upstream_error_status(error), upstream_error_code(error)) {
-            (Some(status), Some(code)) => {
-                format!("quota fetch failed: upstream HTTP {status} {code}")
-            }
-            (Some(status), None) => format!("quota fetch failed: upstream HTTP {status}"),
-            (None, _) => "quota fetch failed: transport error".to_owned(),
-        };
-        if let Err(write_error) = self
-            .repository
-            .apply_state_with_reason(
-                account,
-                account.credential_state(),
-                observed_at,
-                None,
-                Some(detail),
-            )
-            .await
-        {
-            tracing::warn!(
-                account_id = %account.id(),
-                error = %write_error,
-                "OpenAI quota fetch failure record write failed"
             );
         }
     }

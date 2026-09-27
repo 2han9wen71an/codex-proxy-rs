@@ -1816,20 +1816,23 @@ fn map_quota_error(error: CodexCredentialQuotaError) -> ProviderAdminError {
             code,
             detail,
         } => {
-            // 401/403 是授权被拒而非出站故障：公开文案按状态分档并把运营引向
-            // 账号授权；动态错误码（如 token_revoked）只入内部诊断与账号行，
-            // 不违反 public_message 的静态合同。
-            let (kind, public_message) = match status {
-                Some(401) => (
+            // 公开文案只解释已知状态和错误码；原始上游材料留在内部诊断，
+            // 额度查询拒绝不作为凭据失效证据，也不写入账号的凭据错误字段。
+            let (kind, public_message) = match (status, code.as_deref()) {
+                (Some(401), Some("token_revoked")) => (
+                    Kind::BadGateway,
+                    "OpenAI 拒绝了额度查询（HTTP 401，token_revoked）：访问令牌已被撤销，请刷新令牌或重新授权",
+                ),
+                (Some(401), _) => (
                     Kind::BadGateway,
                     "OpenAI 拒绝了额度查询（HTTP 401），请检查账号授权状态；若令牌已在服务端失效，请重新授权",
                 ),
-                Some(403) => (
+                (Some(403), _) => (
                     Kind::BadGateway,
                     "OpenAI 拒绝了额度查询（HTTP 403），请检查账号授权状态",
                 ),
-                Some(429) => (Kind::BadGateway, "OpenAI 额度查询被限流，请稍后重试"),
-                Some(500..=599) => (Kind::BadGateway, "OpenAI 额度查询服务异常，请稍后重试"),
+                (Some(429), _) => (Kind::BadGateway, "OpenAI 额度查询被限流，请稍后重试"),
+                (Some(500..=599), _) => (Kind::BadGateway, "OpenAI 额度查询服务异常，请稍后重试"),
                 _ => (
                     Kind::Unavailable,
                     "OpenAI 额度查询失败，请检查出站连接与上游服务",

@@ -60,7 +60,7 @@ fn quota_service(store: &Arc<MemoryAccountStore>) -> CodexCredentialQuotaService
     )
 }
 
-fn quota_service_with_base_url(
+pub(super) fn quota_service_with_base_url(
     store: &Arc<MemoryAccountStore>,
     http: reqwest::Client,
     base_url: String,
@@ -638,6 +638,9 @@ async fn quota_endpoint_auth_rejections_do_not_reclassify_credentials_or_quota()
         create_account(&store, &account_id).await;
         let account = store.account(&account_id).expect("account");
         persist_quota_state(&store, &account, exhausted_quota(None)).await;
+        let before = store
+            .account(&account_id)
+            .expect("account before rejection");
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/codex/usage"))
@@ -658,18 +661,28 @@ async fn quota_endpoint_auth_rejections_do_not_reclassify_credentials_or_quota()
             Err(CodexCredentialQuotaError::Upstream { .. })
         ));
         let current = store.account(&account_id).expect("preserved account");
-        assert_eq!(current.credential_state(), CredentialState::Ready);
-        assert_eq!(current.quota().access(), QuotaAccessState::Exhausted);
+        assert_eq!(current, before);
+        assert_eq!(
+            service.synchronize().await.expect("quota cycle").transient,
+            1
+        );
+        assert_eq!(
+            store
+                .account(&account_id)
+                .expect("account after quota cycle"),
+            before
+        );
     }
 }
 
 #[tokio::test]
-async fn quota_endpoint_rejection_details_surface_in_error_and_account_row() {
+async fn quota_endpoint_rejection_preserves_details_without_changing_account_facts() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_quota_rejection_detail";
     create_account(&store, account_id).await;
     let account = store.account(account_id).expect("account");
     persist_quota_state(&store, &account, exhausted_quota(None)).await;
+    let before = store.account(account_id).expect("account before rejection");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/codex/usage"))
@@ -697,15 +710,14 @@ async fn quota_endpoint_rejection_details_surface_in_error_and_account_row() {
         }
         other => panic!("expected upstream rejection, got {other:?}"),
     }
-    // 事实保持不变（401 不改写凭据状态），但失败原因要落到账号行可观测。
+    // 额度查询诊断不能进入凭据快照，否则会干扰在途 OAuth 刷新的终态提交。
     let current = store.account(account_id).expect("account after refresh");
-    assert_eq!(current.credential_state(), CredentialState::Ready);
-    assert_eq!(current.quota().access(), QuotaAccessState::Exhausted);
-    let message = current
-        .last_error_message()
-        .expect("quota fetch failure persisted");
-    assert!(message.contains("HTTP 401"), "message: {message}");
-    assert!(message.contains("token_revoked"), "message: {message}");
+    assert_eq!(current, before);
+    store
+        .repository()
+        .load_runtime_credential(&before)
+        .await
+        .expect("unchanged credential");
 }
 
 #[tokio::test]
