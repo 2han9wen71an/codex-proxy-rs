@@ -664,6 +664,51 @@ async fn quota_endpoint_auth_rejections_do_not_reclassify_credentials_or_quota()
 }
 
 #[tokio::test]
+async fn quota_endpoint_rejection_details_surface_in_error_and_account_row() {
+    let store = Arc::new(MemoryAccountStore::default());
+    let account_id = "acct_quota_rejection_detail";
+    create_account(&store, account_id).await;
+    let account = store.account(account_id).expect("account");
+    persist_quota_state(&store, &account, exhausted_quota(None)).await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/usage"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": {
+                "code": "token_revoked",
+                "message": "Encountered invalidated oauth token for user, failing request"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let service = quota_service_with_base_url(
+        &store,
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+        server.uri(),
+    );
+
+    match service.refresh_account(account.id()).await {
+        Err(CodexCredentialQuotaError::Upstream { status, code, .. }) => {
+            assert_eq!(status, Some(401));
+            assert_eq!(code.as_deref(), Some("token_revoked"));
+        }
+        other => panic!("expected upstream rejection, got {other:?}"),
+    }
+    // 事实保持不变（401 不改写凭据状态），但失败原因要落到账号行可观测。
+    let current = store.account(account_id).expect("account after refresh");
+    assert_eq!(current.credential_state(), CredentialState::Ready);
+    assert_eq!(current.quota().access(), QuotaAccessState::Exhausted);
+    let message = current
+        .last_error_message()
+        .expect("quota fetch failure persisted");
+    assert!(message.contains("HTTP 401"), "message: {message}");
+    assert!(message.contains("token_revoked"), "message: {message}");
+}
+
+#[tokio::test]
 async fn payment_required_is_authoritative_quota_exhaustion_without_fabricated_usage() {
     let store = Arc::new(MemoryAccountStore::default());
     let account_id = "acct_payment_required";
