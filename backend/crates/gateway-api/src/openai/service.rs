@@ -170,6 +170,12 @@ impl OpenAiService {
         self.execution.start_provider_endpoint(request).await
     }
 
+    /// Live 语音 sideband 能力；组合未提供时协议层回退到稳定 501。
+    #[must_use]
+    pub(crate) fn live_gateway(&self) -> Option<Arc<dyn gateway_core::live::LiveGateway>> {
+        self.execution.live_gateway()
+    }
+
     pub(crate) fn try_register_connection(
         &self,
     ) -> Result<Box<dyn ConnectionGuard>, ConnectionDraining> {
