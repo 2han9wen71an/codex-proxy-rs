@@ -489,7 +489,9 @@ impl Provider for CodexProvider {
             return self.execute_search(search, candidate, context).await;
         }
         if let Operation::ProviderHttp(request) = request.operation() {
-            return self.execute_live_call(request.clone(), context).await;
+            return self
+                .execute_live_call(request.clone(), candidate.upstream_model(), context)
+                .await;
         }
         let Operation::Generate(generate) = request.operation() else {
             return Err(provider_error(

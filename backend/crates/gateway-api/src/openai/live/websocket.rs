@@ -4,26 +4,24 @@
 //! 本模块只做帧形态映射（Text/Binary 双向、Ping 本地应答、Close 投影），
 //! 不解释帧内容。
 
-use std::sync::Arc;
-
 use axum::{
     extract::{
         State, WebSocketUpgrade,
         ws::{CloseFrame, Message, WebSocket, rejection::WebSocketUpgradeRejection},
     },
     http::{HeaderMap, StatusCode, Uri, header},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use bytes::Bytes;
-use gateway_core::live::{
-    LiveClose, LiveFrame, LiveGateway, LiveRelay, LiveSidebandRequest, LiveSidebandStyle,
-};
+use gateway_core::lifecycle::{CancellationToken, ConnectionGuard};
+use gateway_core::live::{LiveClose, LiveFrame, LiveRelay, LiveSidebandRequest, LiveSidebandStyle};
 
 use super::LiveErrorShape;
 use crate::{
     ApiState,
     openai::{
         auth::{authenticate_client, client_access_error_response},
+        error::runtime_unavailable_response,
         live::{
             filter_protocol_headers, live_error_response, offered_subprotocols,
             realtime_unsupported_response,
@@ -115,6 +113,12 @@ async fn open_sideband(
     let Some(gateway) = service.live_gateway() else {
         return realtime_unsupported_response("Codex live sideband");
     };
+    // sideband 是长连接：在拨号前注册连接 guard，drain 才能统计并等待它关闭。
+    let connection_guard = match service.try_register_connection() {
+        Ok(guard) => guard,
+        Err(_) => return runtime_unavailable_response().into_response(),
+    };
+    let cancellation = service.lifecycle().cancellation();
     let relay = match gateway
         .open_sideband(LiveSidebandRequest {
             call_id: &call_id,
@@ -138,7 +142,7 @@ async fn open_sideband(
             return super::http::live_gateway_error_response(LiveErrorShape::Realtime, &error);
         }
     };
-    serve_sideband(upgrade, relay, gateway, call_id)
+    serve_sideband(upgrade, relay, connection_guard, cancellation)
 }
 
 fn upgrade_required_response() -> Response {
@@ -158,8 +162,8 @@ fn upgrade_required_response() -> Response {
 fn serve_sideband(
     mut upgrade: WebSocketUpgrade,
     relay: LiveRelay,
-    gateway: Arc<dyn LiveGateway>,
-    call_id: String,
+    connection_guard: Box<dyn ConnectionGuard>,
+    cancellation: CancellationToken,
 ) -> Response {
     // 上游已按客户端 offer 协商子协议；只有客户端确实 offer 过才会命中。
     if let Some(subprotocol) = relay.subprotocol.clone() {
@@ -169,33 +173,39 @@ fn serve_sideband(
         .max_message_size(usize::MAX)
         .max_frame_size(usize::MAX)
         .on_upgrade(move |socket| async move {
-            relay_sideband(socket, relay, gateway, call_id).await;
+            relay_sideband(socket, relay, connection_guard, cancellation).await;
         })
 }
 
-/// 双向帧中继；任一侧结束即投影关闭并结算 call 会话。
+/// 双向帧中继；任一侧结束即投影关闭。
+///
+/// 传输中断只结束中继：call 绑定的释放由中继携带的 guard 完成，绑定本身
+/// 保留到会话 TTL，官方 FramelessBidi 客户端会重连同一 call。
 async fn relay_sideband(
     mut client: WebSocket,
     mut relay: LiveRelay,
-    gateway: Arc<dyn LiveGateway>,
-    call_id: String,
+    connection_guard: Box<dyn ConnectionGuard>,
+    cancellation: CancellationToken,
 ) {
+    // guard 覆盖整个中继生命周期，drain 等待其释放。
+    let _connection_guard = connection_guard;
     let mut close_forwarded = false;
-    let reason = loop {
+    loop {
         tokio::select! {
             biased;
+            _ = cancellation.cancelled() => break,
             client_message = client.recv() => match client_message {
                 Some(Ok(message)) => {
                     match message {
                         Message::Text(text) => {
                             let frame = LiveFrame::Text(Bytes::copy_from_slice(text.as_bytes()));
                             if relay.send_frame(frame).await.is_err() {
-                                break "upstream_send_failed";
+                                break;
                             }
                         }
                         Message::Binary(binary) => {
                             if relay.send_frame(LiveFrame::Binary(binary)).await.is_err() {
-                                break "upstream_send_failed";
+                                break;
                             }
                         }
                         // Ping 由本端应答（上游 Ping 同理），不进入对端。
@@ -205,7 +215,7 @@ async fn relay_sideband(
                                 .await
                                 .is_err()
                             {
-                                break "client_send_failed";
+                                break;
                             }
                         }
                         Message::Pong(_) => {}
@@ -216,12 +226,11 @@ async fn relay_sideband(
                             });
                             let _ = relay.send_frame(LiveFrame::Close(close)).await;
                             let _ = relay.close(None).await;
-                            gateway.complete_call(&call_id, "client_closed");
                             return;
                         }
                     }
                 }
-                Some(Err(_)) | None => break "client_closed",
+                Some(Err(_)) | None => break,
             },
             upstream_frame = relay.next_frame() => match upstream_frame {
                 Some(LiveFrame::Text(payload)) => {
@@ -230,17 +239,17 @@ async fn relay_sideband(
                         .await
                         .is_err()
                     {
-                        break "client_send_failed";
+                        break;
                     }
                 }
                 Some(LiveFrame::Binary(payload)) => {
                     if client.send(Message::Binary(payload)).await.is_err() {
-                        break "client_send_failed";
+                        break;
                     }
                 }
                 Some(LiveFrame::Ping(payload)) => {
                     if relay.send_frame(LiveFrame::Pong(payload)).await.is_err() {
-                        break "upstream_send_failed";
+                        break;
                     }
                 }
                 Some(LiveFrame::Pong(_)) => {}
@@ -250,12 +259,12 @@ async fn relay_sideband(
                         reason: close.reason.into(),
                     }))).await;
                     close_forwarded = true;
-                    break "upstream_closed";
+                    break;
                 }
-                None => break "upstream_closed",
+                None => break,
             },
         }
-    };
+    }
     if !close_forwarded {
         // 异常中断按观测到的方向投影为正常关闭；原因不透出给客户端。
         let _ = client
@@ -265,6 +274,8 @@ async fn relay_sideband(
             })))
             .await;
     }
+    // 先归还 call 认领（随 relay 丢弃），再释放连接计数。
     let _ = relay.close(None).await;
-    gateway.complete_call(&call_id, reason);
+    drop(relay);
+    drop(_connection_guard);
 }

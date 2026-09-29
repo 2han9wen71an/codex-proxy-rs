@@ -122,6 +122,10 @@ impl CodexLiveRegistry {
     }
 
     /// 认领 call：校验调用方并阻止并发 sideband；认领后暂停过期。
+    ///
+    /// 调用方必须在认领后立即构造 [`LiveCallClaim`]（两者之间没有 await 点），
+    /// guard 丢弃时归还占用，覆盖拨号取消、升级失败与中继结束等全部退出路径，
+    /// 不依赖显式释放调用。
     fn claim(
         &self,
         call_id: &str,
@@ -142,13 +146,13 @@ impl CodexLiveRegistry {
             return Err(LiveClaimError::OwnerMismatch);
         }
         entry.claimed = true;
-        // 认领重置 TTL：正常通话由 complete_call 结算；upgrade 回调未执行的
-        // 罕见窗口也保证条目最终被回收，不会永久占用 call id。
+        // 认领期间暂停过期；guard 释放时恢复计时。guard 覆盖全部退出路径，
+        // 不存在认领后无法回收的窗口。
         entry.expires_at = Some(SystemTime::now() + LIVE_SESSION_TTL);
         Ok(entry.account_id.clone())
     }
 
-    /// 归还认领（拨号失败时调用）；过期计时恢复。
+    /// 归还认领；由 [`LiveCallClaim`] 的 Drop 触发，过期计时恢复。
     fn release(&self, call_id: &str) {
         let mut entries = self.entries.lock().expect("codex live registry poisoned");
         if let Some(entry) = entries.get_mut(call_id) {
@@ -162,7 +166,8 @@ impl CodexLiveRegistry {
         entries.remove(call_id);
     }
 
-    /// hangup 前的身份复验；不认领，允许与 sideband 并存。
+    /// hangup 前的身份复验；不认领，也不因 sideband 已连接而拒绝——
+    /// 挂断必须随时可用，否则通话中无法主动结束。
     fn peek_owner(
         &self,
         call_id: &str,
@@ -176,9 +181,6 @@ impl CodexLiveRegistry {
         let Some(entry) = entries.get_mut(call_id) else {
             return Err(LiveClaimError::Missing);
         };
-        if entry.claimed {
-            return Err(LiveClaimError::Busy);
-        }
         if &entry.client_api_key_id != client_api_key_id {
             return Err(LiveClaimError::OwnerMismatch);
         }
@@ -186,11 +188,38 @@ impl CodexLiveRegistry {
     }
 }
 
+/// 一次 sideband 认领的取消安全 guard；丢弃时归还占用并恢复过期计时。
+///
+/// guard 随 [`gateway_core::live::LiveRelay`] 存活：拨号失败、升级回调
+/// 未执行或中继结束时都会触发 Drop，条目不会永久停留在 claimed 状态。
+struct LiveCallClaim {
+    registry: Arc<CodexLiveRegistry>,
+    call_id: String,
+}
+
+impl LiveCallClaim {
+    fn new(registry: Arc<CodexLiveRegistry>, call_id: String) -> Self {
+        Self { registry, call_id }
+    }
+}
+
+impl Drop for LiveCallClaim {
+    fn drop(&mut self) {
+        self.registry.release(&self.call_id);
+    }
+}
+
+impl gateway_core::live::LiveRelayGuard for LiveCallClaim {}
+
 impl CodexProvider {
     /// 引擎 arm：把受限的 realtime calls Provider HTTP 操作发往 Codex backend。
+    ///
+    /// `upstream_model` 是路由计划携带的实际语音模型：选号阶段按账号模型
+    /// 权限过滤候选，禁止该模型的账号不会服务语音请求。
     pub(super) async fn execute_live_call(
         self: Arc<Self>,
         request: ProviderHttpRequest,
+        upstream_model: Option<&UpstreamModelId>,
         context: AttemptContext,
     ) -> Result<ProviderStream, ProviderError> {
         if request.method() != ProviderHttpMethod::Post || request.endpoint() != LIVE_CALLS_ENDPOINT
@@ -207,11 +236,15 @@ impl CodexProvider {
                 request_url: &self.live_calls_url,
                 attempt: &context,
                 session_affinity: None,
+                upstream_model: upstream_model.map(UpstreamModelId::as_str),
+                // realtime calls 端点绑定 ChatGPT OAuth 身份；在候选阶段就排除
+                // API Key 账号，避免混合账号池选中不支持语音的账号后必然失败。
+                requires_oauth: true,
             })
             .await
             .map_err(map_selection_error)?;
         if lease.authentication().oauth().is_none() {
-            // realtime calls 端点绑定 ChatGPT OAuth 身份；API Key 凭据不在本端点范围。
+            // 诊断等旁路仍可能到达非 OAuth 租约；此处兜底拒绝。
             return Err(provider_error(
                 ProviderErrorKind::Unsupported,
                 UpstreamSendState::NotSent,
@@ -613,13 +646,9 @@ impl LiveGateway for CodexLiveGateway {
                 .map_err(|claim_error| {
                     LiveGatewayError::new(claim_error.kind(), claim_error.message())
                 })?;
-            let (account, authorization) = match self.load_pinned_credential(&account_id).await {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    self.registry.release(request.call_id);
-                    return Err(error);
-                }
-            };
+            // 认领与 guard 构造之间没有 await 点，取消不会留下孤儿认领。
+            let claim = LiveCallClaim::new(Arc::clone(&self.registry), request.call_id.to_owned());
+            let (account, authorization) = self.load_pinned_credential(&account_id).await?;
             let endpoint = Self::sideband_endpoint(request.style, request.call_id);
             let mut headers = vec![host_header(&endpoint)];
             headers.push(("authorization".to_owned(), authorization));
@@ -635,9 +664,19 @@ impl LiveGateway for CodexLiveGateway {
             }
             match connect_live_sideband(endpoint, headers, account.outbound_proxy().cloned()).await
             {
-                Ok(sideband) => Ok(into_live_relay(sideband.stream, sideband.subprotocol)),
+                Ok(sideband) => {
+                    let mut relay = into_live_relay(sideband.stream, sideband.subprotocol);
+                    // guard 随中继存活：传输中断只释放占用，绑定保留到会话 TTL，
+                    // 官方 FramelessBidi 客户端会重连同一 call。
+                    relay.with_guard(Box::new(claim));
+                    Ok(relay)
+                }
                 Err(error) => {
-                    self.registry.release(request.call_id);
+                    if sideband_call_gone(&error) {
+                        // 上游报告通话不存在（404/410，对应官方会话结束判定），
+                        // 立即删除绑定，避免死条目占满 TTL。
+                        self.registry.complete(request.call_id);
+                    }
                     Err(map_sideband_dial_error(error))
                 }
             }
@@ -656,6 +695,14 @@ impl LiveGateway for CodexLiveGateway {
                     LiveGatewayError::new(claim_error.kind(), claim_error.message())
                 })?;
             let (account, authorization) = self.load_pinned_credential(&account_id).await?;
+            // hangup 与引导同源：必须走钉住账号的出口代理与连接池，
+            // 不能使用共享 client 直连发出。
+            let client = self.client.for_account(&account).map_err(|_| {
+                LiveGatewayError::new(
+                    LiveGatewayErrorKind::CredentialUnavailable,
+                    "codex live hangup account client is unavailable",
+                )
+            })?;
             let request_id = Uuid::new_v4().to_string();
             let mut context = CodexRequestContext::auxiliary(
                 authorization.as_str(),
@@ -668,8 +715,7 @@ impl LiveGateway for CodexLiveGateway {
                 "{OPENAI_API_HTTP_BASE}/realtime/calls/{}/hangup",
                 request.call_id
             );
-            let outcome = self
-                .client
+            let outcome = client
                 .post_live_hangup(
                     url,
                     request.content_type.as_deref(),
@@ -693,8 +739,14 @@ impl LiveGateway for CodexLiveGateway {
             }
         })
     }
+}
 
-    fn complete_call(&self, call_id: &str, _reason: &str) {
-        self.registry.complete(call_id);
-    }
+/// 上游拨号失败是否等价于通话已结束；与官方 `webrtc_sideband_session_ended`
+/// 一致，只把 404/410 视为会话结束信号。
+fn sideband_call_gone(error: &CodexWebSocketExchangeError) -> bool {
+    matches!(
+        error,
+        CodexWebSocketExchangeError::Upstream(upstream)
+            if matches!(upstream.status_code, 404 | 410)
+    )
 }

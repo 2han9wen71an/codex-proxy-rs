@@ -61,6 +61,20 @@ pub(crate) async fn live_call(
         };
     let upstream_model = codex_realtime_model(model);
     let upstream_body = rewrite_call_request_model(upstream_body, &upstream_model);
+    // 实际语音模型参与路由与账号权限检查：账号范围不含该模型时在路由层拒绝，
+    // 而不是写进正文后仍由未授权账号服务。
+    let upstream_model_id =
+        match gateway_core::routing::UpstreamModelId::from_client_wire(upstream_model.clone()) {
+            Ok(model) => model,
+            Err(_) => {
+                return live_error_response(
+                    LiveErrorShape::Live,
+                    StatusCode::BAD_REQUEST,
+                    "Codex live call request has an invalid model",
+                    "invalid_request",
+                );
+            }
+        };
     let operation = match live_call_operation(
         upstream_body,
         upstream_content_type.as_deref(),
@@ -81,6 +95,7 @@ pub(crate) async fn live_call(
         .start_prepared_provider_endpoint(
             prepared,
             Operation::ProviderHttp(operation),
+            Some(upstream_model_id),
             client_ip,
             user_agent,
             uri.path().to_owned(),

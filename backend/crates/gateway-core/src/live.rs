@@ -82,12 +82,19 @@ pub struct LiveCallOutcome {
 }
 
 /// sideband 中继的上游半边；帧按原始顺序搬运，不做协议解释。
+///
+/// 中继可以携带一个会话 guard（如 call 的账号认领）；`LiveRelay` 被
+/// 丢弃时 guard 一并释放，覆盖传输中断、升级失败与任务取消等全部退出路径。
 pub struct LiveRelay {
     /// 上游已协商的 `Sec-WebSocket-Protocol`；协议 adapter 据此回写下游。
     pub subprotocol: Option<String>,
     receiver: Box<dyn LiveRelayStream>,
     sender: Box<dyn LiveRelaySink>,
+    guard: Option<Box<dyn LiveRelayGuard>>,
 }
+
+/// 随 [`LiveRelay`] 存活的会话占用标记；丢弃时由实现方归还资源。
+pub trait LiveRelayGuard: Send {}
 
 impl LiveRelay {
     /// 由 Provider 实现装配；Core 不感知底层 WebSocket 栈。
@@ -101,7 +108,13 @@ impl LiveRelay {
             subprotocol,
             receiver,
             sender,
+            guard: None,
         }
+    }
+
+    /// 附加随中继释放的会话 guard；重复调用以最后一次为准。
+    pub fn with_guard(&mut self, guard: Box<dyn LiveRelayGuard>) {
+        self.guard = Some(guard);
     }
 
     /// 读取上游下一帧；返回 `None` 表示上游已关闭。
@@ -251,8 +264,15 @@ impl std::error::Error for LiveGatewayError {}
 ///
 /// 实现方负责把 call id 钉到创建账号、复验调用方身份，并用该账号的
 /// 运行时凭据拨号；Core 与协议 adapter 不接触账号凭据。
+///
+/// call 绑定的生命周期由实现方管理：sideband 断开只释放占用，绑定保留到
+/// 会话 TTL（官方 FramelessBidi 客户端会在传输中断后重连同一 call）；
+/// 确认结束（挂断成功、上游报告通话不存在）才删除绑定。
 pub trait LiveGateway: Send + Sync {
     /// 为已建立的 call 建立账号级上游 sideband 中继。
+    ///
+    /// 返回的 [`LiveRelay`] 携带本次占用的 guard；中继结束即释放占用，
+    /// 协议 adapter 无需另行通知会话结束。
     fn open_sideband<'a>(
         &'a self,
         request: LiveSidebandRequest<'a>,
@@ -263,9 +283,6 @@ pub trait LiveGateway: Send + Sync {
         &'a self,
         request: LiveHangupRequest<'a>,
     ) -> BoxFuture<'a, Result<LiveCallOutcome, LiveGatewayError>>;
-
-    /// sideband 结束后由协议 adapter 通知 Provider 结算会话；重复通知必须幂等。
-    fn complete_call(&self, call_id: &str, reason: &str);
 }
 
 /// call id 形态校验；与上游 `Location` 的可解析范围一致。
